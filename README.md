@@ -3,6 +3,13 @@
 ## Augmentation Pipeline
 
 
+## Geometries
+
+For every census area id in the index, there is a static geojson file containing the shape. Those files are stored by default the directory *data/census/*
+
+You can create those files by running *split_geojson.py*
+
+They are split to single census areas to enable only loading the necessary geometries during the script. The assumption is that most datasets will be aggregated over only a small number of census areas.
 
 
 ## Index builder
@@ -23,11 +30,6 @@ The index is simply a QuadTree mapping at a single zoom level of all census trac
 
 If a lat/lon is converted to X=22 and Y=336, then we know the census area is 02016000100
 
-### Geometries
-
-For every census area id in the index, there is a static geojson file containing the shape. Those files are stored by default the directory *data/census/*
-
-They are split to single census areas to enable only loading the necessary geometries during the script. The assumption is that most datasets will be aggregated over only a small number of census areas.
 
 ### Higher aggregates table
 

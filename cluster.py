@@ -9,12 +9,14 @@ import sys
 import mmap
 import json
 import math
+import time
 from shapely.geometry import shape, Point, Polygon, MultiPolygon
 
 NUM_PROCS = multiprocessing.cpu_count()
 
 class CSVWorker(object):
     def __init__(self, numprocs, augmentation, infile, outfile, latIdx, lonIdx, options):
+
         self.numprocs = numprocs
         self.psprocs = self.numprocs # in case any lesser value is better (n-1)
 
@@ -85,6 +87,7 @@ class CSVWorker(object):
 
     def parse_input_csv(self):
 
+        start_time = time.time()
         # Read the input file with mmap and add every row to the queue
         with open(self.infile, "r+b") as f:
             # memory-mapInput the file, size 0 means whole file
@@ -100,6 +103,7 @@ class CSVWorker(object):
                 L+=1
             mapInput.close()
 
+        print("Idx--- %s seconds ---" % (time.time() - start_time))
         for i in range(self.psprocs):
             self.idx.put("STOP")
 
@@ -149,27 +153,24 @@ class CSVWorker(object):
                         for v in self.tileidx[tx][ty]:
                             if v in opengeos:
                                 # see if the shape exists in shared memory
-                                d = opengeos[v]
+                                c = opengeos[v]
                             else:
                                 d = json.load(open(self.geom_directory+'/%s.json' % v, 'r'))
-                                # Store the shape object in shared memory
-                                opengeos[v] = d
-                            # shapely doesn't seem to love all polys equally
-                            try:
-                                c = MultiPolygon([Polygon(pol) for pol in d['coordinates']]) 
-                            except:
-                                c = Polygon(d['coordinates'][0][0])
-                            try:
-                                if Point(lon, lat).within(c):
-                                    aug = v
-                                    break  # stop looping the possible shapes
-                            except:
-                                print lat, lon 
-                                print c
+                                # shapely doesn't seem to love all polys equally
+                                try:
+                                    c = MultiPolygon([Polygon(pol) for pol in d['coordinates']]) 
+                                except:
+                                    c = Polygon(d['coordinates'][0][0])
+
+                            # Store the shape object in shared memory
+                            opengeos[v] = c
+
+                            if Point(lon, lat).within(c):
+                                aug = v
+                                break  # stop looping the possible shapes
 
                 hashidx[hsh] = aug
             self.outq.put( (row, aug ) )
-
 
         self.outq.put("STOP")
 
@@ -197,19 +198,20 @@ class CSVWorker(object):
         #                     cur += 1
         # else: 
         for works in range(self.psprocs):
-            for val, aug in iter(self.outq.get, "STOP"):
+            for vals in iter(self.outq.get, "STOP"):
+                row = vals[0]
+                aug = vals[1]
                 if aug==None:
                     if self.options['filterNulls'] != True:
-                        self.out_csvfile.write( val[0] + ''+self.options['delimiter']+''.join(['','','']) + "\n" )
-                        break
-                augs = self.agg_index[aug]
-                self.out_csvfile.write( val[0] + ''+self.options['delimiter']+''.join([aug, augs['countyfp'], augs['statefp']]) + "\n" )
+                        self.out_csvfile.write( row + ''+self.options['delimiter']+''.join(['','','']) + "\n" )
+                else:
+                    augs = self.agg_index[aug]
+                    self.out_csvfile.write( row + ''+self.options['delimiter']+''.join([aug, augs['countyfp'], augs['statefp']]) + "\n" )
         outfile.close()
 
 def main():
-    c = CSVWorker(NUM_PROCS, "census", "data/test.mini.csv", "data/output.csv", 5, 6, {'delimiter': ',', 'rowOrder': False, 'skipHeader': True, 'filterNulls': False})
+    c = CSVWorker(NUM_PROCS, "census", "data/public.csv", "data/output.csv", 5, 6, {'delimiter': ',', 'rowOrder': False, 'skipHeader': True, 'filterNulls': False})
 if __name__ == '__main__':
-    import time
     start_time = time.time()
     main()
     print("--- %s seconds ---" % (time.time() - start_time))
