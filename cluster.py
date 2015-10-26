@@ -52,11 +52,11 @@ class CSVWorker(object):
 
         # Create a process for parsing the CSV rows
         self.pin = multiprocessing.Process(target=self.parse_input_csv, args=())
-        # Create a process for saving the results
-        self.pout = multiprocessing.Process(target=self.write_output_csv, args=())
         # Create a process for calculating row intersections. Provide it shared memory objects
         self.ps = [ multiprocessing.Process(target=self.augment_row, args=(hashidx,opengeos,))
                         for i in range(self.psprocs)]
+        # Create a process for saving the results
+        self.pout = multiprocessing.Process(target=self.write_output_csv, args=())
 
         self.pin.start() # start processing the CSV
         self.pout.start() # start listening for results
@@ -143,29 +143,32 @@ class CSVWorker(object):
 
                 if tx in self.tileidx and ty in self.tileidx[tx]:
                     if len(self.tileidx[tx][ty])==1:
+                        # if the tile only intersects one geom, we are done
                         aug = self.tileidx[tx][ty][0]
                     else: 
                         for v in self.tileidx[tx][ty]:
                             if v in opengeos:
-                                c = opengeos[v]
+                                # see if the shape exists in shared memory
+                                d = opengeos[v]
                             else:
                                 d = json.load(open(self.geom_directory+'/%s.json' % v, 'r'))
-                                # shapely doesn't seem to love all polys equally
-                                try:
-                                    c = MultiPolygon([Polygon(pol) for pol in d['coordinates']]) 
-                                except:
-                                    c = Polygon(d['coordinates'][0][0])
-                                opengeos[v] = c
-                            if Point(lon, lat).within(c):
-                                aug = v
-                                break  # stop looping the possible shapes
+                                # Store the shape object in shared memory
+                                opengeos[v] = d
+                            # shapely doesn't seem to love all polys equally
+                            try:
+                                c = MultiPolygon([Polygon(pol) for pol in d['coordinates']]) 
+                            except:
+                                c = Polygon(d['coordinates'][0][0])
+                            try:
+                                if Point(lon, lat).within(c):
+                                    aug = v
+                                    break  # stop looping the possible shapes
+                            except:
+                                print lat, lon 
+                                print c
 
                 hashidx[hsh] = aug
-            if aug == None:
-                if self.options['filterNulls'] != True:
-                    self.outq.put( (row, []) )
-            else: 
-                self.outq.put( (row, [aug] ) )
+            self.outq.put( (row, aug ) )
 
 
         self.outq.put("STOP")
@@ -194,9 +197,13 @@ class CSVWorker(object):
         #                     cur += 1
         # else: 
         for works in range(self.psprocs):
-            for val in iter(self.outq.get, "STOP"):
-
-                self.out_csvfile.write( val[0] + ''+self.options['delimiter']+''.join(val[1]) + "\n" )
+            for val, aug in iter(self.outq.get, "STOP"):
+                if aug==None:
+                    if self.options['filterNulls'] != True:
+                        self.out_csvfile.write( val[0] + ''+self.options['delimiter']+''.join(['','','']) + "\n" )
+                        break
+                augs = self.agg_index[aug]
+                self.out_csvfile.write( val[0] + ''+self.options['delimiter']+''.join([aug, augs['countyfp'], augs['statefp']]) + "\n" )
         outfile.close()
 
 def main():
