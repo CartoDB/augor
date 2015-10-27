@@ -4,14 +4,11 @@
 
 import csv
 import multiprocessing
-import optparse
-import sys
-import mmap
 import json
 import math
 import time
 import sys
-from shapely.geometry import shape, Point, Polygon, MultiPolygon
+from shapely.geometry import Point, Polygon, MultiPolygon
 
 NUM_PROCS = multiprocessing.cpu_count()
 
@@ -110,41 +107,31 @@ class CSVWorker(object):
         # Read the input file with mmap and add every row to the queue
         with open(self.infile, "r+b") as f:
             # memory-mapInput the file, size 0 means whole file
-            mapInput = mmap.mmap(f.fileno(), 0)
+            reader = csv.reader(f)
             # read content via standard file methods
-            L=0
-            for row in iter(mapInput.readline, ""):
-                if L==0 and self.options['skipHeader'] == True:
+            for L, row in enumerate(reader):
+                if L == 0 and self.options['skipHeader'] == True:
                     self.header = row
-                    L+=1
                     continue
-                # self.idx.put( (L, s) )
 
-                row = row.strip()
-                data = row.split(self.options['delimiter'])   
-                lat = float(data[self.latIdx])
-                lon = float(data[self.lonIdx])
+                lat = float(row[self.latIdx])
+                lon = float(row[self.lonIdx])
 
                 aug = None
 
                 tile = self.qt.tile_from_lat_lon(lat, lon)
 
-                tx = tile[0]
-                ty = tile[1]
+                tx, ty = tile
 
                 if tx in self.tileidx and ty in self.tileidx[tx]:
                     if len(self.tileidx[tx][ty])==1:
                         # if the tile only intersects one geom, we are done
                         aug = self.tileidx[tx][ty][0]
                         self.outq.put( (row, aug ) )
-                    else: 
+                    else:
                         self.idx.put( (row, lat, lon, self.tileidx[tx][ty] ) )
                 else:
                     self.outq.put( (row, None ) )
-
-
-                L+=1
-            mapInput.close()
 
         for i in range(self.psprocs):
             self.idx.put("STOP")
@@ -187,7 +174,7 @@ class CSVWorker(object):
 
     def write_output_csv(self):
 
-        self.out_csvfile = sys.stdout
+        self.out_csvfile = csv.writer(sys.stdout)
 
         # TODO re-enable will NULL filtering etc
         # cur = 0
@@ -211,12 +198,14 @@ class CSVWorker(object):
             for vals in iter(self.outq.get, "STOP"):
                 val = vals[0]
                 aug = vals[1]
-                if aug==None:
+                if aug == None:
                     if self.options['filterNulls'] != True:
-                        self.out_csvfile.write( val + self.options['delimiter'].join(['','','']) + "\n" )
+                        val.extend(['', '', ''])
+                        self.out_csvfile.writerow(val)
                 else:
                     augs = self.agg_index[aug]
-                    self.out_csvfile.write( val + self.options['delimiter'].join([aug, augs['countyfp'], augs['statefp']]) + "\n" )
+                    val.extend([aug, augs['countyfp'], augs['statefp']])
+                    self.out_csvfile.writerow(val)
 
 def main():
     c = CSVWorker(NUM_PROCS, "census", "data/test.mini.csv", 5, 6, {'delimiter': ',', 'rowOrder': False, 'skipHeader': True, 'filterNulls': False})
