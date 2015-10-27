@@ -8,7 +8,12 @@ import json
 import math
 import time
 import sys
-from shapely.geometry import Point, Polygon, MultiPolygon
+import redis
+from shapely.geometry import Point
+from shapely import speedups, wkt
+
+assert speedups.available == True
+speedups.enable()
 
 NUM_PROCS = multiprocessing.cpu_count()
 
@@ -61,7 +66,7 @@ class CSVWorker(object):
 
         mgr = multiprocessing.Manager()
         hashidx = mgr.dict()
-        opengeos = mgr.dict()
+        r = redis.Redis()
 
         # Load our QuadTree index calculated by GenerateIndex.ipynb
         cindex = self.load_index(self.augmentation)
@@ -76,7 +81,7 @@ class CSVWorker(object):
         # Create a process for parsing the CSV rows
         self.pin = multiprocessing.Process(target=self.parse_input_csv, args=())
         # Create a process for calculating row intersections. Provide it shared memory objects
-        self.ps = [ multiprocessing.Process(target=self.augment_row, args=(hashidx,opengeos,))
+        self.ps = [ multiprocessing.Process(target=self.augment_row, args=(hashidx,r,))
                         for i in range(self.psprocs)]
         # Create a process for saving the results
         self.pout = multiprocessing.Process(target=self.write_output_csv, args=())
@@ -136,7 +141,7 @@ class CSVWorker(object):
         for i in range(self.psprocs):
             self.idx.put("STOP")
 
-    def augment_row(self, hashidx, opengeos):
+    def augment_row(self, hashidx, r):
 
         for val in iter(self.idx.get, "STOP"):
             row = val[0] 
@@ -150,22 +155,10 @@ class CSVWorker(object):
             if hsh in hashidx:
                 aug = hashidx[hsh] 
             else:
+                p = Point(lon, lat)
                 for v in hits:
-                    if v in opengeos:
-                        # see if the shape exists in shared memory
-                        c = opengeos[v]
-                    else:
-                        d = json.load(open(self.geom_directory+'/%s.json' % v, 'r'))
-                        # shapely doesn't seem to love all polys equally
-                        try:
-                            c = MultiPolygon([Polygon(pol) for pol in d['coordinates']]) 
-                        except:
-                            c = Polygon(d['coordinates'][0][0])
-
-                    # Store the shape object in shared memory
-                    opengeos[v] = c
-
-                    if Point(lon, lat).within(c):
+                    c = wkt.loads(r.get(v))
+                    if p.within(c):
                         aug = v
                         break  # stop looping the possible shapes
                 hashidx[hsh] = aug

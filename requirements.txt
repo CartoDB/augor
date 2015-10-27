@@ -1,1 +1,3 @@
-shapely
+Shapely==1.5.13
+ujson==1.3.3
+redis==2.10.3

@@ -97,7 +97,7 @@ def mmap_parse_file(infile, latIdx, lonIdx, delimiter):
 
 
 def main():
-    testfile = "../../data/public.csv"
+    testfile = "../data/public.csv"
     latIdx = 5
     lonIdx = 6
     delimiter = ','
@@ -105,7 +105,7 @@ def main():
     pandas_parse_file(testfile, latIdx, lonIdx, delimiter)
     print("pandas", "--- %s seconds ---" % (time.time() - start_time))
 
-    testfile = "../../data/public.csv"
+    testfile = "../data/public.csv"
     start_time = time.time()
     mmap_parse_file(testfile, latIdx, lonIdx, delimiter)
     print("mmap", "--- %s seconds ---" % (time.time() - start_time))
