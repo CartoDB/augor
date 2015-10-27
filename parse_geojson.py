@@ -8,8 +8,8 @@ import ujson as json
 import logging
 import time
 import sys
-from shapely.geometry import asShape
-from shapely import speedups
+from shapely.geometry import asShape, box
+from shapely import speedups, wkt
 import redis
 
 assert speedups.available == True
@@ -19,7 +19,7 @@ LOGGER = logging.getLogger(__name__)
 LOGGER.setLevel(logging.INFO)
 LOGGER.addHandler(logging.StreamHandler(sys.stderr))
 
-def main():
+def import_json():
     r = redis.Redis()
 
     start = time.time()
@@ -36,5 +36,18 @@ def main():
         r.set(geoid, geometry.wkt)
     LOGGER.info('loaded into redis [%s]', time.time() - start)
 
+def add_bbox():
+    r = redis.Redis()
+
+    start = time.time()
+
+    LOGGER.info('converting bboxes')
+    for geoid in r.keys():
+        geom = wkt.loads(r.get(geoid))
+        bbox = box(*geom.bounds)
+        r.set(geoid + '_bbox', bbox.wkt)
+    LOGGER.info('converted bboxes [%s]', time.time() - start)
+
 if __name__ == '__main__':
-    main()
+    import_json()
+    add_bbox()

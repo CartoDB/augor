@@ -34,3 +34,22 @@ If a lat/lon is converted to X=22 and Y=336, then we know the census area is 020
 ### Higher aggregates table
 
 For each census area in the index, we also know what State and County the area is within. In the next iteration we can add ZCTA too. This data is stored as an object in *census_aggregates.json* by default
+
+## Running the script
+
+Install pre-reqs (on mac):
+
+    brew install redis pv
+    pip install -r requirements.txt
+
+Populate redis (expects census tract json at `data/censustracts.geojson`):
+
+    python parse_geojson.py
+
+Run the script (substituting for `path/to/input.csv`)
+
+    time pv -p path/to/input.csv | python cluster.py | pv -a > data/output.csv
+
+You will get two progress indicators: one for the file read (which should be
+very fast) and the second for output writing (which will just be a kbps
+average).

@@ -9,8 +9,14 @@ import math
 import time
 import sys
 import redis
+import fileinput
+import logging
 from shapely.geometry import Point
 from shapely import speedups, wkt
+
+LOGGER = logging.getLogger(__name__)
+LOGGER.setLevel(logging.INFO)
+LOGGER.addHandler(logging.StreamHandler(sys.stderr))
 
 assert speedups.available == True
 speedups.enable()
@@ -44,18 +50,16 @@ class QuadTree(object):
         return (tx, ty)
 
 class CSVWorker(object):
-    def __init__(self, numprocs, augmentation, infile, latIdx, lonIdx, options):
+    def __init__(self, numprocs, augmentation, latIdx, lonIdx, options):
 
         self.numprocs = numprocs
         self.psprocs = self.numprocs # in case any lesser value is better (n-1)
-
-        self.infile = infile
 
         self.header = ""
         self.latIdx = latIdx
         self.lonIdx = lonIdx
         self.augmentation = augmentation
-        
+
         self.options = {'delimiter': ',', 'keepRowOrder': False, 'skipHeader': True, 'filterNulls': False}
         self.options.update(options)
 
@@ -77,22 +81,25 @@ class CSVWorker(object):
         self.qt = QuadTree(self.zoom)
 
         self.agg_index = self.load_aggregate_index(self.augmentation) # Load our higher geom index map
-        
+
         # Create a process for parsing the CSV rows
-        self.pin = multiprocessing.Process(target=self.parse_input_csv, args=())
+        #self.pin = multiprocessing.Process(target=self.parse_input_csv, args=(fno, ))
+
         # Create a process for calculating row intersections. Provide it shared memory objects
         self.ps = [ multiprocessing.Process(target=self.augment_row, args=(hashidx,r,))
                         for i in range(self.psprocs)]
         # Create a process for saving the results
         self.pout = multiprocessing.Process(target=self.write_output_csv, args=())
 
-        self.pin.start() # start processing the CSV
+        #self.pin.start() # start processing the CSV
         self.pout.start() # start listening for results
 
         for p in self.ps:
             p.start() # start each of our intersection processes
 
-        self.pin.join()
+        #self.pin.join()
+        self.parse_input_csv()
+
         for p in self.ps:
             p.join()
 
@@ -110,33 +117,34 @@ class CSVWorker(object):
 
     def parse_input_csv(self):
         # Read the input file with mmap and add every row to the queue
-        with open(self.infile, "r+b") as f:
-            # memory-mapInput the file, size 0 means whole file
-            reader = csv.reader(f)
-            # read content via standard file methods
-            for L, row in enumerate(reader):
-                if L == 0 and self.options['skipHeader'] == True:
-                    self.header = row
-                    continue
+        #with open(self.infile, "r+b") as f:
 
-                lat = float(row[self.latIdx])
-                lon = float(row[self.lonIdx])
+        reader = csv.reader(fileinput.input())
+        # read content via standard file methods
 
-                aug = None
+        for L, row in enumerate(reader):
+            if L == 0 and self.options['skipHeader'] == True:
+                self.header = row
+                continue
 
-                tile = self.qt.tile_from_lat_lon(lat, lon)
+            lat = float(row[self.latIdx])
+            lon = float(row[self.lonIdx])
 
-                tx, ty = tile
+            aug = None
 
-                if tx in self.tileidx and ty in self.tileidx[tx]:
-                    if len(self.tileidx[tx][ty])==1:
-                        # if the tile only intersects one geom, we are done
-                        aug = self.tileidx[tx][ty][0]
-                        self.outq.put( (row, aug ) )
-                    else:
-                        self.idx.put( (row, lat, lon, self.tileidx[tx][ty] ) )
+            tile = self.qt.tile_from_lat_lon(lat, lon)
+
+            tx, ty = tile
+
+            if tx in self.tileidx and ty in self.tileidx[tx]:
+                if len(self.tileidx[tx][ty])==1:
+                    # if the tile only intersects one geom, we are done
+                    aug = self.tileidx[tx][ty][0]
+                    self.outq.put( (row, aug ) )
                 else:
-                    self.outq.put( (row, None ) )
+                    self.idx.put( (row, lat, lon, self.tileidx[tx][ty] ) )
+            else:
+                self.outq.put( (row, None ) )
 
         for i in range(self.psprocs):
             self.idx.put("STOP")
@@ -155,12 +163,14 @@ class CSVWorker(object):
             if hsh in hashidx:
                 aug = hashidx[hsh] 
             else:
-                p = Point(lon, lat)
                 for v in hits:
-                    c = wkt.loads(r.get(v))
-                    if p.within(c):
-                        aug = v
-                        break  # stop looping the possible shapes
+                    minx, miny, maxx, maxy = wkt.loads(r.get(v + '_bbox')).bounds
+                    #if bbox.contains(p):
+                    if minx < lon < maxx and miny < lat < maxy:
+                        geom = wkt.loads(r.get(v))
+                        if geom.contains(Point(lon, lat)):
+                            aug = v
+                            break  # stop looping the possible shapes
                 hashidx[hsh] = aug
             self.outq.put( (row, aug ) )
         self.outq.put("STOP")
@@ -201,7 +211,7 @@ class CSVWorker(object):
                     self.out_csvfile.writerow(val)
 
 def main():
-    c = CSVWorker(NUM_PROCS, "census", "data/test.mini.csv", 5, 6, {'delimiter': ',', 'rowOrder': False, 'skipHeader': True, 'filterNulls': False})
+    c = CSVWorker(NUM_PROCS, "census", 5, 6, {'delimiter': ',', 'rowOrder': False, 'skipHeader': True, 'filterNulls': False})
     c.start()
 
 if __name__ == '__main__':
