@@ -164,13 +164,10 @@ class CSVWorker(object):
                 aug = hashidx[hsh] 
             else:
                 for v in hits:
-                    minx, miny, maxx, maxy = wkt.loads(r.get(v + '_bbox')).bounds
-                    #if bbox.contains(p):
-                    if minx < lon < maxx and miny < lat < maxy:
-                        geom = wkt.loads(r.get(v))
-                        if geom.contains(Point(lon, lat)):
-                            aug = v
-                            break  # stop looping the possible shapes
+                    geom = wkt.loads(r.get(v))
+                    if geom.contains(Point(lon, lat)):
+                        aug = v
+                        break  # stop looping the possible shapes
                 hashidx[hsh] = aug
             self.outq.put( (row, aug ) )
         self.outq.put("STOP")
