@@ -10,6 +10,7 @@ import mmap
 import json
 import math
 import time
+import sys
 from shapely.geometry import shape, Point, Polygon, MultiPolygon
 
 NUM_PROCS = multiprocessing.cpu_count()
@@ -41,13 +42,12 @@ class QuadTree(object):
         return (tx, ty)
 
 class CSVWorker(object):
-    def __init__(self, numprocs, augmentation, infile, outfile, latIdx, lonIdx, options):
+    def __init__(self, numprocs, augmentation, infile, latIdx, lonIdx, options):
 
         self.numprocs = numprocs
         self.psprocs = self.numprocs # in case any lesser value is better (n-1)
 
         self.infile = infile
-        self.outfile = outfile
 
         self.header = ""
         self.latIdx = latIdx
@@ -187,8 +187,7 @@ class CSVWorker(object):
 
     def write_output_csv(self):
 
-        outfile = open(self.outfile, "w")
-        self.out_csvfile = outfile
+        self.out_csvfile = sys.stdout
 
         # TODO re-enable will NULL filtering etc
         # cur = 0
@@ -218,10 +217,9 @@ class CSVWorker(object):
                 else:
                     augs = self.agg_index[aug]
                     self.out_csvfile.write( val + self.options['delimiter'].join([aug, augs['countyfp'], augs['statefp']]) + "\n" )
-        outfile.close()
 
 def main():
-    c = CSVWorker(NUM_PROCS, "census", "data/test.mini.csv", "data/output.csv", 5, 6, {'delimiter': ',', 'rowOrder': False, 'skipHeader': True, 'filterNulls': False})
+    c = CSVWorker(NUM_PROCS, "census", "data/test.mini.csv", 5, 6, {'delimiter': ',', 'rowOrder': False, 'skipHeader': True, 'filterNulls': False})
     c.start()
 
 if __name__ == '__main__':
