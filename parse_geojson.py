@@ -47,19 +47,6 @@ def import_json():
         r.set(geoid, geometry.wkt)
     LOGGER.info('loaded into redis [%s]', time.time() - start)
 
-#def add_bbox():
-#    r = redis.Redis()
-#
-#    start = time.time()
-#
-#    LOGGER.info('converting bboxes')
-#    for geoid in r.keys():
-#        if 'bbox' in geoid:
-#            continue
-#        geom = wkt.loads(r.get(geoid))
-#        bbox = box(*geom.bounds)
-#        r.set(geoid + '_bbox', bbox.wkt)
-#    LOGGER.info('converted bboxes [%s]', time.time() - start)
 
 def generate_rtree():
 
