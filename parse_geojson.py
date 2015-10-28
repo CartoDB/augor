@@ -85,5 +85,5 @@ def generate_rtree():
     LOGGER.info('generated rtree index [%s]', time.time() - start)
 
 if __name__ == '__main__':
-    #import_json()
+    import_json()
     generate_rtree()
