@@ -4,13 +4,13 @@
 
 import csv
 import multiprocessing
-import json
-import math
+import rtree
 import time
 import sys
 import redis
 import fileinput
 import logging
+import ujson as json
 from shapely.geometry import Point
 from shapely import speedups, wkt
 
@@ -22,32 +22,6 @@ assert speedups.available == True
 speedups.enable()
 
 NUM_PROCS = multiprocessing.cpu_count()
-
-class QuadTree(object):
-    def __init__(self, zoom):
-        # Only calculate the quadtree math constants one time
-        self.zoom = zoom
-        self.tileSize = 256.0
-        self.initialResolution = 2.0 * math.pi * 6378137 / self.tileSize
-        self.originShift = 2.0 * math.pi * 6378137 / 2.0
-        self.res = self.initialResolution / (2**self.zoom);
-
-    def tile_from_lat_lon(self, lat, lon):
-
-        # // "Converts given lat/lon in WGS84 Datum to XY in Spherical Mercator EPSG:900913"
-        mx = lon * self.originShift / 180.0;
-        my = math.log( math.tan((90.0 + lat) * math.pi / 360.0 )) / (math.pi / 180.0);
-        my = my * self.originShift / 180.0;
-
-        # // "Converts EPSG:900913 to pyramid pixel coordinates in given zoom level"
-        px = (mx + self.originShift) / self.res;
-        py = (my + self.originShift) / self.res;
-
-        # // "Returns a tile covering region in given pixel coordinates"
-        tx = str(int( math.ceil( px / (self.tileSize) ) - 1 ));
-        ty = str(int((2**self.zoom) - 1 - int( math.ceil( py / (self.tileSize) ) - 1 )));
-
-        return (tx, ty)
 
 class CSVWorker(object):
     def __init__(self, numprocs, augmentation, latIdx, lonIdx, options):
@@ -72,18 +46,8 @@ class CSVWorker(object):
         hashidx = mgr.dict()
         r = redis.Redis()
 
-        # Load our QuadTree index calculated by GenerateIndex.ipynb
-        cindex = self.load_index(self.augmentation)
-        self.zoom = cindex['zoom'] # Store the zoom level of the QT index
-        self.tileidx = cindex['index'] # The index itself
-        self.geom_directory = cindex['geometry_directory'] # The directory of geometries for each focus
-
-        self.qt = QuadTree(self.zoom)
-
-        self.agg_index = self.load_aggregate_index(self.augmentation) # Load our higher geom index map
-
-        # Create a process for parsing the CSV rows
-        #self.pin = multiprocessing.Process(target=self.parse_input_csv, args=(fno, ))
+        self.rtree = self.load_index(self.augmentation) # Load rtree index
+        self.agg_index = self.load_aggregate_index(self.augmentation) # Load metadata for augmentations
 
         # Create a process for calculating row intersections. Provide it shared memory objects
         self.ps = [ multiprocessing.Process(target=self.augment_row, args=(hashidx,r,))
@@ -91,13 +55,12 @@ class CSVWorker(object):
         # Create a process for saving the results
         self.pout = multiprocessing.Process(target=self.write_output_csv, args=())
 
-        #self.pin.start() # start processing the CSV
         self.pout.start() # start listening for results
 
         for p in self.ps:
             p.start() # start each of our intersection processes
 
-        #self.pin.join()
+        # Start parsing the CSV
         self.parse_input_csv()
 
         for p in self.ps:
@@ -105,71 +68,55 @@ class CSVWorker(object):
 
         self.pout.join()
 
-    def load_index(self, augmentation):
-        if augmentation == 'census':
-            with open('data/census.json') as data_file:    
-                return json.load(data_file)
-
     def load_aggregate_index(self, augmentation):
         if augmentation == 'census':
-            with open('data/census_aggregates.json') as data_file:    
+            with open('data/census_aggregates.json') as data_file:
                 return json.load(data_file)
 
-    def parse_input_csv(self):
-        # Read the input file with mmap and add every row to the queue
-        #with open(self.infile, "r+b") as f:
+    def load_index(self, augmentation):
+        if augmentation == 'census':
+            return rtree.Rtree('data/census.rtree')
 
+    def parse_input_csv(self):
         reader = csv.reader(fileinput.input())
-        # read content via standard file methods
 
         for L, row in enumerate(reader):
             if L == 0 and self.options['skipHeader'] == True:
                 self.header = row
                 continue
 
-            lat = float(row[self.latIdx])
-            lon = float(row[self.lonIdx])
+            lat, lon = float(row[self.latIdx]), float(row[self.lonIdx])
 
-            aug = None
-
-            tile = self.qt.tile_from_lat_lon(lat, lon)
-
-            tx, ty = tile
-
-            if tx in self.tileidx and ty in self.tileidx[tx]:
-                if len(self.tileidx[tx][ty])==1:
-                    # if the tile only intersects one geom, we are done
-                    aug = self.tileidx[tx][ty][0]
-                    self.outq.put( (row, aug ) )
-                else:
-                    self.idx.put( (row, lat, lon, self.tileidx[tx][ty] ) )
+            matches = [o for o in self.rtree.intersection((lon, lat, lon, lat))]
+            if len(matches) == 0:
+                #LOGGER.warn('no rtree intersection for (lon, lat) %s, %s', lon, lat)
+                self.outq.put((row, None,))
+            elif len(matches) == 1:
+                self.outq.put((row, matches[0],))
             else:
-                self.outq.put( (row, None ) )
+                self.idx.put((row, lat, lon, matches,))
 
-        for i in range(self.psprocs):
+        for _ in range(self.psprocs):
             self.idx.put("STOP")
 
     def augment_row(self, hashidx, r):
 
         for val in iter(self.idx.get, "STOP"):
-            row = val[0] 
-            lat = val[1]
-            lon = val[2] 
-            hits = val[3] 
+            row, lat, lon, hits = val
             aug = None
 
-            hsh = str(lat)+","+str(lon) # TODO real hash perhaps, not sure if needed
+            hsh = (lat, lon, )
 
             if hsh in hashidx:
-                aug = hashidx[hsh] 
+                aug = hashidx[hsh]
             else:
-                for v in hits:
-                    geom = wkt.loads(r.get(v))
+                for geoid in hits:
+                    geom = wkt.loads(r.get(str(geoid).zfill(11)))
                     if geom.contains(Point(lon, lat)):
-                        aug = v
+                        aug = str(geoid).zfill(11)
                         break  # stop looping the possible shapes
                 hashidx[hsh] = aug
-            self.outq.put( (row, aug ) )
+            self.outq.put((row, aug,))
         self.outq.put("STOP")
 
     def write_output_csv(self):
@@ -194,7 +141,7 @@ class CSVWorker(object):
         #                     del buffer[cur]
         #                     cur += 1
         # else: 
-        for works in range(self.psprocs):
+        for _ in range(self.psprocs):
             for vals in iter(self.outq.get, "STOP"):
                 val = vals[0]
                 aug = vals[1]
@@ -203,7 +150,7 @@ class CSVWorker(object):
                         val.extend(['', '', ''])
                         self.out_csvfile.writerow(val)
                 else:
-                    augs = self.agg_index[aug]
+                    augs = self.agg_index[str(aug).zfill(11)]
                     val.extend([aug, augs['countyfp'], augs['statefp']])
                     self.out_csvfile.writerow(val)
 

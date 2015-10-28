@@ -39,7 +39,7 @@ For each census area in the index, we also know what State and County the area i
 
 Install pre-reqs (on mac):
 
-    brew install redis pv
+    brew install redis pv spatialindex
     pip install -r requirements.txt
 
 Populate redis (expects census tract json at `data/censustracts.geojson`):
