@@ -22,3 +22,12 @@ Run the script (substituting for `path/to/input.csv`)
 You will get two progress indicators: one for the file read (which should be
 very fast) and the second for output writing (which will just be a kbps
 average).
+
+## Using the augmentation pipeline
+
+You'll want to run augmentation from the pipe provided by cerberus:
+
+    cat ../cerberus/pipe | ./augment.sh
+
+This will generate augmented CSVs at `$name.csv` and logs of their creation at
+`$name.log`.
