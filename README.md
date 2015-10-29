@@ -10,7 +10,7 @@ Install pre-reqs (on mac):
 Populate redis and aggregates.  This expects census tract json at
 `data/censustracts.geojson`:
 
-    python parse_geojson.py
+    python parse_geojson.py data/censustracts.geojson
 
 Run the script (substituting for `path/to/input.csv`)
 
