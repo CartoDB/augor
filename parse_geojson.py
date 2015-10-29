@@ -29,16 +29,20 @@ class FastRtree(rtree.Rtree):
         return cPickle.dumps(obj, -1)
 
 
-def import_json():
+def load_json(fname):
+    start = time.time()
+    LOGGER.info('loading JSON')
+    with open(fname) as f_handle:
+        data = json.load(f_handle)
+    LOGGER.info('loaded JSON [%s]', time.time() - start)
+    return data
+
+
+def populate_redis(data):
     r = redis.Redis()
     r.flushdb()
 
     start = time.time()
-
-    LOGGER.info('loading JSON')
-    with open('data/censustracts.geojson') as f_handle:
-        data = json.load(f_handle)
-    LOGGER.info('loaded JSON [%s]', time.time() - start)
 
     LOGGER.info('loading into redis')
     for feature in data['features']:
@@ -46,6 +50,24 @@ def import_json():
         geometry = asShape(feature['geometry'])
         r.set(geoid, geometry.wkt)
     LOGGER.info('loaded into redis [%s]', time.time() - start)
+
+
+def generate_aggregates(data):
+    start = time.time()
+
+    LOGGER.info('generating aggregate JSON file')
+
+    output_data = {}
+    for feature in data['features']:
+        output_data[feature['properties']['geoid']] = {
+            'countyfp': feature['properties']['countyfp'],
+            'statefp': feature['properties']['statefp']
+        }
+
+    with open('data/census_aggregates.json', 'w') as outfile:
+        json.dump(output_data, outfile)
+
+    LOGGER.info('generated aggregate JSON file [%s]', time.time() - start)
 
 
 def generate_rtree():
@@ -59,7 +81,6 @@ def generate_rtree():
             pass
 
     idx = FastRtree(dbname)
-    #idx = index.Index()
 
     LOGGER.info('generating rtree index')
     start = time.time()
@@ -72,5 +93,8 @@ def generate_rtree():
     LOGGER.info('generated rtree index [%s]', time.time() - start)
 
 if __name__ == '__main__':
-    import_json()
+    census_data = load_json('data/censustracts.geojson')
+
+    populate_redis(census_data)
+    generate_aggregates(census_data)
     generate_rtree()
