@@ -93,8 +93,11 @@ def generate_rtree():
     LOGGER.info('generated rtree index [%s]', time.time() - start)
 
 if __name__ == '__main__':
-    census_data = load_json('data/censustracts.geojson')
+    if len(sys.argv) == 2:
+        census_data = load_json(sys.argv[1])
 
-    populate_redis(census_data)
-    generate_aggregates(census_data)
-    generate_rtree()
+        populate_redis(census_data)
+        generate_aggregates(census_data)
+        generate_rtree()
+    else:
+        LOGGER.error('USAGE: python parse_geojson.py path/to/censustracts.geojson')

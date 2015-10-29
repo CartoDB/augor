@@ -43,7 +43,11 @@ def load_index(augmentation):
 def parse_input_csv(itx_q, latIdx, lonIdx, rtree_idx, agg_idx):
     reader = csv.reader(sys.stdin)
 
-    for _, row in enumerate(reader):
+    for i, row in enumerate(reader):
+        if i == 0:
+            write_output_csv(agg_idx, row, header=True)
+            continue
+
         lat, lon = float(row[latIdx]), float(row[lonIdx])
 
         matches = [o for o in rtree_idx.intersection((lon, lat, lon, lat))]
@@ -83,7 +87,10 @@ def augment_row(itx_q, hashidx, redis_conn, agg_idx):
         write_output_csv(agg_idx, row, aug)
 
 
-def write_output_csv(agg_idx, val, aug=None):
+def write_output_csv(agg_idx, val, aug=None, header=False):
+    # TODO should be based off of augment
+    if header == True:
+        val.extend(['geoid', 'countyfp', 'statefp'])
     if aug is None:
         val.extend(['', '', ''])
     else:
