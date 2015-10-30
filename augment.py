@@ -96,7 +96,7 @@ def write_output_csv(val, augs=None, header=False):
     # TODO should be based off of augment
     if header == True:
         val.extend(['geoid', 'countyfp', 'statefp'])
-    if augs is None:
+    elif augs is None:
         val.extend(['', '', ''])
     else:
         val.extend([augs['geoid'], augs['countyfp'], augs['statefp']])
