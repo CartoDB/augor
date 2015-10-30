@@ -7,10 +7,10 @@ Install pre-reqs (on mac):
     brew install redis pv spatialindex
     pip install -r requirements.txt
 
-Populate redis and aggregates.  This expects census tract json at
-`data/censustracts.geojson`:
+Populate redis and aggregates.  This expects an augmentation CSV with a `geom`
+WKT column:
 
-    python parse_geojson.py data/censustracts.geojson
+    python prep_augmentation.py data/augmentation.csv
 
 Run the script (substituting for `path/to/input.csv`)
 

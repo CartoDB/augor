@@ -23,29 +23,26 @@ NUM_PROCS = multiprocessing.cpu_count()
 
 WRITER = csv.writer(sys.stdout)
 
-def load_aggregate_index(augmentation):
-    '''
-    Load pre-generated JSON mapping of ID to additional columns
-    '''
-    if augmentation == 'census':
-        with open('data/census_aggregates.json') as data_file:
-            return json.load(data_file)
+
+def get_agg_data(redis_conn, aug_name, id_):
+    return json.loads(redis_conn.get(
+        '/'.join([aug_name, str(id_).zfill(11)])
+    ))
 
 
-def load_index(augmentation):
+def load_index(aug_name):
     '''
     Load pre-generated rtree index
     '''
-    if augmentation == 'census':
-        return rtree.Rtree('data/census.rtree')
+    return rtree.Rtree('../data/{}.rtree'.format(aug_name))
 
 
-def parse_input_csv(itx_q, latIdx, lonIdx, rtree_idx, agg_idx):
+def parse_input_csv(itx_q, latIdx, lonIdx, rtree_idx, redis_conn, aug_name):
     reader = csv.reader(sys.stdin)
 
     for i, row in enumerate(reader):
         if i == 0:
-            write_output_csv(agg_idx, row, header=True)
+            write_output_csv(row, header=True)
             continue
 
         lat, lon = float(row[latIdx]), float(row[lonIdx])
@@ -53,9 +50,11 @@ def parse_input_csv(itx_q, latIdx, lonIdx, rtree_idx, agg_idx):
         matches = [o for o in rtree_idx.intersection((lon, lat, lon, lat))]
         if len(matches) == 0:
             #LOGGER.warn('no rtree intersection for (lon, lat) %s, %s', lon, lat)
-            write_output_csv(agg_idx, row)
+            write_output_csv(row, None)
         elif len(matches) == 1:
-            write_output_csv(agg_idx, row, matches[0])
+            augs = get_agg_data(redis_conn, aug_name, matches[0])
+            del augs['geom']
+            write_output_csv(row, augs)
         else:
             itx_q.put((row, lat, lon, matches,))
 
@@ -63,7 +62,7 @@ def parse_input_csv(itx_q, latIdx, lonIdx, rtree_idx, agg_idx):
         itx_q.put("STOP")
 
 
-def augment_row(itx_q, hashidx, redis_conn, agg_idx):
+def augment_row(itx_q, hashidx, redis_conn, aug_name):
     '''
     Add augmentation columns to this row, checking against actual geometries
     from redis if necessary.
@@ -71,55 +70,52 @@ def augment_row(itx_q, hashidx, redis_conn, agg_idx):
 
     for val in iter(itx_q.get, "STOP"):
         row, lat, lon, hits = val
-        aug = None
+        augs = None
 
         hsh = (lat, lon, )
 
         if hsh in hashidx:
-            aug = hashidx[hsh]
+            augs = hashidx[hsh]
         else:
             for geoid in hits:
-                geom = wkt.loads(redis_conn.get(str(geoid).zfill(11)))
+                augs = get_agg_data(redis_conn, aug_name, geoid)
+                geom = wkt.loads(augs.pop('geom'))
                 if geom.contains(Point(lon, lat)):
-                    aug = str(geoid).zfill(11)
                     break  # stop looping the possible shapes
-            hashidx[hsh] = aug
-        write_output_csv(agg_idx, row, aug)
+            hashidx[hsh] = augs
+        write_output_csv(row, augs)
 
 
-def write_output_csv(agg_idx, val, aug=None, header=False):
+def write_output_csv(val, augs=None, header=False):
     # TODO should be based off of augment
     if header == True:
         val.extend(['geoid', 'countyfp', 'statefp'])
-    if aug is None:
+    if augs is None:
         val.extend(['', '', ''])
     else:
-        augs = agg_idx[str(aug).zfill(11)]
-        val.extend([aug, augs['countyfp'], augs['statefp']])
+        val.extend([augs['geoid'], augs['countyfp'], augs['statefp']])
     WRITER.writerow(val)
 
 
-def main(latcolno, loncolno, augmentation):
+def main(latcolno, loncolno, aug_name):
     itx_q = multiprocessing.Queue() # Our intersection job queue
-    #out_q = multiprocessing.Queue() # Our output writing queue
 
     mgr = multiprocessing.Manager()
     hashidx = mgr.dict()
     redis_conn = redis.Redis()
 
-    rtree_idx = load_index(augmentation) # Load rtree index
-    agg_idx = load_aggregate_index(augmentation) # Load metadata for augmentations
+    rtree_idx = load_index(aug_name) # Load rtree index
 
     # Create a process for calculating row intersections. Provide it shared memory objects
     itx_ps = [multiprocessing.Process(target=augment_row,
-                                      args=(itx_q, hashidx, redis_conn, agg_idx))
+                                      args=(itx_q, hashidx, redis_conn, aug_name))
               for _ in range(NUM_PROCS)]
 
     for process in itx_ps:
         process.start() # start each of our intersection processes
 
     # Start parsing the CSV
-    parse_input_csv(itx_q, int(latcolno), int(loncolno), rtree_idx, agg_idx)
+    parse_input_csv(itx_q, int(latcolno), int(loncolno), rtree_idx, redis_conn, aug_name)
 
     for process in itx_ps:
         process.join()
