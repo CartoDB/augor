@@ -8,5 +8,5 @@ do
   lon=$(echo "$line" | cut -f 4)
   augments=$(echo "$line" | cut -f 5)
 
-  curl -s "$url" | tail +2 | python ../augor/augment.py $lat $lon $augments > $name.csv 2>$name.log &
+  curl -s "$url" | tail -n +2 | python ../augor/augment.py $lat $lon $augments > $name.csv 2>$name.log &
 done
