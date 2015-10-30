@@ -37,7 +37,7 @@ def load_index(aug_name):
     return rtree.Rtree('../data/{}.rtree'.format(aug_name))
 
 
-def parse_input_csv(itx_q, latIdx, lonIdx, rtree_idx, redis_conn, aug_name):
+def parse_input_csv(itx_q, latIdx, lonIdx, rtree_idx, redis_conn, aug_name, hashidx):
     reader = csv.reader(sys.stdin)
 
     for i, row in enumerate(reader):
@@ -47,16 +47,22 @@ def parse_input_csv(itx_q, latIdx, lonIdx, rtree_idx, redis_conn, aug_name):
 
         lat, lon = float(row[latIdx]), float(row[lonIdx])
 
-        matches = [o for o in rtree_idx.intersection((lon, lat, lon, lat))]
-        if len(matches) == 0:
-            #LOGGER.warn('no rtree intersection for (lon, lat) %s, %s', lon, lat)
-            write_output_csv(row, None)
-        elif len(matches) == 1:
-            augs = get_agg_data(redis_conn, aug_name, matches[0])
-            del augs['geom']
+        hsh = (lat, lon, )
+        if hsh in hashidx:
+            augs = hashidx[hsh]
             write_output_csv(row, augs)
         else:
-            itx_q.put((row, lat, lon, matches,))
+            matches = [o for o in rtree_idx.intersection((lon, lat, lon, lat))]
+            if len(matches) == 0:
+                #LOGGER.warn('no rtree intersection for (lon, lat) %s, %s', lon, lat)
+                write_output_csv(row, None)
+            elif len(matches) == 1:
+                augs = get_agg_data(redis_conn, aug_name, matches[0])
+                del augs['geom']
+                hashidx[hsh] = augs
+                write_output_csv(row, augs)
+            else:
+                itx_q.put((row, lat, lon, matches,))
 
     for _ in range(NUM_PROCS):
         itx_q.put("STOP")
@@ -115,7 +121,7 @@ def main(latcolno, loncolno, aug_name):
         process.start() # start each of our intersection processes
 
     # Start parsing the CSV
-    parse_input_csv(itx_q, int(latcolno), int(loncolno), rtree_idx, redis_conn, aug_name)
+    parse_input_csv(itx_q, int(latcolno), int(loncolno), rtree_idx, redis_conn, aug_name, hashidx)
 
     for process in itx_ps:
         process.join()

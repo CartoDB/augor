@@ -10,7 +10,7 @@ Install pre-reqs (on mac):
 Populate redis and aggregates.  This expects an augmentation CSV with a `geom`
 WKT column:
 
-    python prep_augmentation.py data/augmentation.csv
+    python prep.py data/augmentation.csv
 
 Run the script (substituting for `path/to/input.csv`)
 

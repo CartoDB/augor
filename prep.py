@@ -48,7 +48,7 @@ def main(csv_path):
     red = redis.Redis()
     red.flushdb()
 
-    for fname in (aug_name + '.dat', aug_name +'.idx', ):
+    for fname in (rtree_path + '.dat', rtree_path +'.idx', ):
         try:
             os.remove(fname)
         except OSError:
@@ -61,7 +61,7 @@ def main(csv_path):
             populate_redis(red, aug_name, row)
             generate_rtree(idx, row)
             if i % 1000 == 0:
-                print i
+                LOGGER.info(i)
 
 
 if __name__ == '__main__':
