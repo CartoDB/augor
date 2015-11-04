@@ -75,7 +75,9 @@ def parse_input_csv(itx_q, latIdx, lonIdx, rtree_idx, pgres, aug_name, hashidx):
         if i == 0:
             headers = get_headers(pgres, aug_name)
             blank_row = ['' for _ in headers][2:]
-            write_output_csv(row, headers)
+            # TODO we don't want to output headers if we're putting into postgres,
+            # this is where we should create our table
+            #write_output_csv(row, headers)
             continue
 
         lat, lon = float(row[latIdx]), float(row[lonIdx])
