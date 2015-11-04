@@ -6,10 +6,9 @@ Prep an augmentation from a CSV with headers and a WKT column `geom`
 
 import sys
 import cPickle
-from shapely import speedups, wkt
+from shapely import speedups, wkb
 import rtree
 import os
-import redis
 import csv
 import logging
 import ujson as json
@@ -35,10 +34,10 @@ def populate_redis(r, aug_name, row):
     r.set('/'.join([aug_name, geoid]), json.dumps(row))
 
 
-#def generate_rtree(idx, row):
-#    geom = wkt.loads(row['geom'])
-#    geoid = row['geoid']
-#    idx.insert(int(geoid), geom.bounds)
+def generate_rtree(idx, geoid, geom):
+    geom = wkb.loads(geom.decode('hex'))
+    geoid = geoid[-11:]
+    idx.insert(int(geoid), geom.bounds)
 
 
 def create_pgres_table(pgres):
@@ -73,26 +72,26 @@ def create_pgres_table(pgres):
         columns_by_seq[seq_id].append(column_id)
 
     # Create the census_extract table we'll be using for our augmentations
-    #pgres.execute('DROP TABLE IF EXISTS census_extract')
-    #LOGGER.info(pgres.statusmessage)
-    #pgres.execute('CREATE TABLE census_extract '
-    #              '(geoid CHARACTER VARYING(40) '
-    #              ' NOT NULL, '
-    #              'geom GEOMETRY NOT NULL, {data}, {moe})'
-    #              .format(
-    #                  data=', '.join(['"{}" DOUBLE PRECISION'.format(cid.lower()) for cid in column_ids]),
-    #                  moe=', '.join(['"{}_moe" DOUBLE PRECISION'.format(cid.lower()) for cid in column_ids]),
-    #              )
-    #             )
-    #LOGGER.info(pgres.statusmessage)
-    #pgres.execute('INSERT INTO census_extract '
-    #             'SELECT full_geoid, the_geom '
-    #             'FROM tiger2012.census_name_lookup '
-    #             'WHERE sumlevel = \'140\'')
-    #LOGGER.info(pgres.statusmessage)
-    #pgres.execute('ALTER TABLE census_extract '
-    #              ' ADD CONSTRAINT census_extract_pk PRIMARY KEY (geoid)')
-    #LOGGER.info(pgres.statusmessage)
+    pgres.execute('DROP TABLE IF EXISTS census_extract')
+    LOGGER.info(pgres.statusmessage)
+    pgres.execute('CREATE TABLE census_extract '
+                  '(geoid CHARACTER VARYING(40) '
+                  ' NOT NULL, '
+                  'geom GEOMETRY NOT NULL, {data}, {moe})'
+                  .format(
+                      data=', '.join(['"{}" DOUBLE PRECISION'.format(cid.lower()) for cid in column_ids]),
+                      moe=', '.join(['"{}_moe" DOUBLE PRECISION'.format(cid.lower()) for cid in column_ids]),
+                  )
+                 )
+    LOGGER.info(pgres.statusmessage)
+    pgres.execute('INSERT INTO census_extract '
+                 'SELECT full_geoid, the_geom '
+                 'FROM tiger2012.census_name_lookup '
+                 'WHERE sumlevel = \'140\'')
+    LOGGER.info(pgres.statusmessage)
+    pgres.execute('ALTER TABLE census_extract '
+                  ' ADD CONSTRAINT census_extract_pk PRIMARY KEY (geoid)')
+    LOGGER.info(pgres.statusmessage)
 
     pgres.connection.commit()
     for seq_id, column_ids in sorted(columns_by_seq.iteritems()):
@@ -114,35 +113,34 @@ def create_pgres_table(pgres):
         pgres.connection.commit()
         LOGGER.warn(pgres.statusmessage)
 
-def main(csv_path):
-    #dirpath = os.path.split(csv_path)[0]
+def main(dirpath):
     #aug_name = '.'.join(os.path.split(csv_path)[1].split('.')[0:-1])
-    #rtree_path = os.path.join(dirpath, aug_name) + '.rtree'
-
-    #red = redis.Redis()
-    #red.flushdb()
+    aug_name = 'censustracts'
+    rtree_path = os.path.join(dirpath, aug_name) + '.rtree'
 
     pgres = psycopg2.connect('postgres:///census').cursor()
     create_pgres_table(pgres)
 
-    #for fname in (rtree_path + '.dat', rtree_path +'.idx', ):
-    #    try:
-    #        os.remove(fname)
-    #    except OSError:
-    #        pass
+    for fname in (rtree_path + '.dat', rtree_path +'.idx', ):
+        try:
+            os.remove(fname)
+        except OSError:
+            pass
 
-    #idx = FastRtree(rtree_path)
+    idx = FastRtree(rtree_path)
 
-    #with open(csv_path) as csv_file:
-    #    for i, row in enumerate(csv.DictReader(csv_file)):
-    #        populate_redis(red, aug_name, row)
-    #        generate_rtree(idx, row)
-    #        if i % 1000 == 0:
-    #            LOGGER.info(i)
+    stmt = 'SELECT geoid, geom FROM census_extract'
+    pgres.execute(stmt)
+    i = 0
+    for geoid, geom in pgres.fetchone():
+        generate_rtree(idx, geoid, geom)
+        if i % 1000 == 0:
+            LOGGER.info(i)
+        i += 1
 
 
 if __name__ == '__main__':
     if len(sys.argv) == 2:
         main(sys.argv[1])
     else:
-        LOGGER.error('USAGE: python prep_augmentation.py <path/to/augmentation.csv>')
+        LOGGER.error('USAGE: python prep_augmentation.py <path/to/rtree>')
