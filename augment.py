@@ -9,6 +9,7 @@ import sys
 import redis
 import logging
 import ujson as json
+from math import floor, sin, log, pi, radians
 from shapely.geometry import Point
 from shapely import speedups, wkt
 
@@ -67,6 +68,28 @@ def parse_input_csv(itx_q, latIdx, lonIdx, rtree_idx, redis_conn, aug_name, hash
     for _ in range(NUM_PROCS):
         itx_q.put("STOP")
 
+def lonlat2xyq(lat, lon, z=31):
+    # Converts a lat, lon to a QuadTree X-Y coordinate and QuadKey (x, y, q)
+    lat = lat if lat <= 85.05112878 else 85.05112878
+    lat = lat if lat >= -85.05112878 else -85.05112878
+    lon = lon if lon <= 180 else 180
+    lon = lon if lon >= -180 else -180
+
+    fx = (lon+180.0)/360.0
+    sinlat = sin(radians(lat))
+    fy = 0.5 - log((1+sinlat)/(1-sinlat)) / (4*pi)
+
+    mapsize = 1<<z
+
+    x = floor(fx*mapsize)
+    x = 0 if x < 0 else x
+    y = floor(fy*mapsize)
+    y = 0 if y < 0 else y
+
+    x = int(x if x < mapsize else (mapsize-1))
+    y = int(y if y < mapsize else (mapsize-1))
+    q = sum(((x & (1 << i)) << (i)) | ((y & (1 << i)) << (i+1)) for i in range(z))
+    return (x, y, q)
 
 def augment_row(itx_q, hashidx, redis_conn, aug_name):
     '''
