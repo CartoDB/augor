@@ -93,7 +93,6 @@ def create_pgres_table(pgres):
                   ' ADD CONSTRAINT census_extract_pk PRIMARY KEY (geoid)')
     LOGGER.info(pgres.statusmessage)
 
-    pgres.connection.commit()
     for seq_id, column_ids in sorted(columns_by_seq.iteritems()):
         LOGGER.warn(seq_id)
         stmt = 'UPDATE census_extract ce SET {setclause} ' \
@@ -110,7 +109,6 @@ def create_pgres_table(pgres):
                 )
         LOGGER.warn(stmt)
         pgres.execute(stmt)
-        pgres.connection.commit()
         LOGGER.warn(pgres.statusmessage)
 
 def main(dirpath):
@@ -118,25 +116,26 @@ def main(dirpath):
     aug_name = 'censustracts'
     rtree_path = os.path.join(dirpath, aug_name) + '.rtree'
 
-    pgres = psycopg2.connect('postgres:///census').cursor()
-    create_pgres_table(pgres)
+    with psycopg2.connect('postgres:///census') as conn:
+        with conn.cursor() as pgres:
+            create_pgres_table(pgres)
 
-    for fname in (rtree_path + '.dat', rtree_path +'.idx', ):
-        try:
-            os.remove(fname)
-        except OSError:
-            pass
+            for fname in (rtree_path + '.dat', rtree_path +'.idx', ):
+                try:
+                    os.remove(fname)
+                except OSError:
+                    pass
 
-    idx = FastRtree(rtree_path)
+            idx = FastRtree(rtree_path)
 
-    stmt = 'SELECT geoid, geom FROM census_extract'
-    pgres.execute(stmt)
-    i = 0
-    for geoid, geom in pgres:
-        generate_rtree(idx, geoid, geom)
-        if i % 1000 == 0:
-            LOGGER.info(i)
-        i += 1
+            stmt = 'SELECT geoid, geom FROM census_extract'
+            pgres.execute(stmt)
+            i = 0
+            for geoid, geom in pgres:
+                generate_rtree(idx, geoid, geom)
+                if i % 1000 == 0:
+                    LOGGER.info(i)
+                i += 1
 
 
 if __name__ == '__main__':
