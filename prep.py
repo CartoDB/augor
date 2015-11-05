@@ -49,7 +49,7 @@ def create_pgres_table(pgres):
     with open('acs_tables.json', 'r') as tables_file:
         table_ids = json.load(tables_file)
 
-    pgres.execute('select table_id, column_id from acs2012_5yr.census_column_metadata where table_id '
+    pgres.execute('select table_id, column_id from acs2013_5yr.census_column_metadata where table_id '
                   'in ({})'.format(', '.join("'" + c + "'" for c in table_ids)))
 
     columns_by_seq = {}
@@ -62,7 +62,7 @@ def create_pgres_table(pgres):
         column_ids.append(column_id)
         stmt = 'SELECT view_definition ' \
                 'FROM information_schema.views ' \
-                'WHERE table_schema = \'acs2012_5yr\' AND ' \
+                'WHERE table_schema = \'acs2013_5yr\' AND ' \
                 'table_name = \'{}\''.format(table_id.lower())
         LOGGER.debug(stmt)
         pgres.execute(stmt)
