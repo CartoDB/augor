@@ -18,7 +18,7 @@ assert speedups.available == True
 speedups.enable()
 
 LOGGER = logging.getLogger(__name__)
-LOGGER.setLevel(logging.DEBUG)
+LOGGER.setLevel(logging.INFO)
 LOGGER.addHandler(logging.StreamHandler(sys.stderr))
 
 csv.field_size_limit(sys.maxsize)
@@ -85,9 +85,9 @@ def create_pgres_table(pgres):
                  )
     LOGGER.info(pgres.statusmessage)
     pgres.execute('INSERT INTO census_extract '
-                 'SELECT full_geoid, the_geom '
-                 'FROM tiger2012.census_name_lookup '
-                 'WHERE sumlevel = \'140\'')
+                  'SELECT full_geoid, the_geom '
+                  'FROM tiger2012.census_name_lookup '
+                  'WHERE sumlevel = \'140\'')
     LOGGER.info(pgres.statusmessage)
     pgres.execute('ALTER TABLE census_extract '
                   ' ADD CONSTRAINT census_extract_pk PRIMARY KEY (geoid)')
@@ -132,7 +132,7 @@ def main(dirpath):
     stmt = 'SELECT geoid, geom FROM census_extract'
     pgres.execute(stmt)
     i = 0
-    for geoid, geom in pgres.fetchone():
+    for geoid, geom in pgres:
         generate_rtree(idx, geoid, geom)
         if i % 1000 == 0:
             LOGGER.info(i)
