@@ -9,13 +9,16 @@ Install pre-reqs (on mac):
 
 Or on Debian flavor:
 
-    sudo apt-get install python-pip python-dev curl pv libspatialindex-dev
+    sudo apt-get install python-pip python-dev curl pv libspatialindex-dev \
+                         libgeos-dev
 
 And after [adding postgres 9.4 apt
 repo](http://www.unixmen.com/install-postgresql-9-4-phppgadmin-ubuntu-14-10/):
 
     sudo apt-get install postgresql-9.4 postgresql-9.2-postgis-2.1 \
-                         postgresql-contrib-9.4 postgresql-9.4-postgis-scripts
+                         postgresql-contrib-9.4 postgresql-9.4-postgis-scripts \
+                         libpq-dev
+
 
 To augment a dataset with census data, you'll need census data -- fortunately,
 the good people at [censusreporter](https://github.com/censusreporter) have
@@ -62,6 +65,7 @@ means generating a derived table with columns of data we're interested in, as
 well as an rtree for faster spatial processing.  You need to provide a data
 path where it will create the rtree:
 
+    pip install -r requirements.txt # you may want to do this in a virtualenv
     python prep.py path/to/rtree
 
 Currently, this assumes that the existing user can read, write, and create
@@ -88,9 +92,9 @@ process, you can save the input filesize and use `pv`:
     INPUT=path/to/input.csv
     WC=$(wc -l $INPUT)
     FILESIZE=$(echo $WC | cut -d ' ' -f 1)
-    time cat $1 | python augment.py <latcolno> <loncolno> census | \
+    time cat $INPUT | python augment.py <latcolno> <loncolno> censustracts | \
          pv -a -p -e -l -s $FILESIZE | \
-         psql -c 'COPY t FROM stdin WITH csv'
+         psql -d census -c 'COPY augmented FROM stdin WITH csv'
 
 Note that it is dependent on having a static input file -- if you're working
 with an input stream, you'll need to get the size data from elsewhere to get a
@@ -102,3 +106,11 @@ You'll want to run augmentation from the pipe provided by cerberus:
 
     cat ../cerberus/pipe | ./augment.sh | psql -c 'COPY t FROM stdin WITH CSV'
 
+
+## Benchmarks
+
+On an 8-core Macbook Pro, matching points to census tracts, augmenting, and
+piping into SQL runs at about 1800 rows per second.
+
+On a 32-core AWS compute-optimized instance, the same task runs at about 4800
+rows per second.
