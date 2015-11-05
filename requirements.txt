@@ -1,3 +1,4 @@
+cython
 Shapely==1.5.13
 ujson==1.33
 Rtree==0.8.2
