@@ -38,14 +38,66 @@ class PostgresProcess(multiprocessing.Process):
         self._args = tuple(args)
 
 # TODO we should read these from config
-COLUMNS = '"geoid","geom","b00001001","b00002001","b01001001","b01001002","b01001003","b01001004","b01001005","b01001006","b01001007","b01001008"'
+COLUMNS = {
+    'geoid': 'geoid',
+    'geom': 'geom',
+    'b01001001': 'population',
+    'b01001002': 'male',
+    'b01001026': 'female',
+    'b03002012': 'hispanic',
+    'b03002006': 'asian',
+    'b03002004': 'black',
+    'b03002003': 'white',
+    'b09001001': 'children', # under 18
+    'b09020001': 'seniors', # 65 and older
+    'b11001001': 'households',
+    'b14001002': 'school_enrollment',  # need grade school enrollment, not "detailed",
+                                       # this by default includes enrollment in college
+                                       # and grad school, not just grade school
+    'B15003022': 'bachelors', # would we want to assume people with
+                              # masters/doctorate have a bachelors too?  they would be excluded...
+    #'': 'no_high_school', # tough.. do we cut off at grade 9 on B15003?
+    # high school diploma vs. not?
+    # b150003002 + b150003003 + b150003004 + b150003005 +
+    # b150003006 + b150003007 + b150003008 + b150003009 +
+    # b150003010 + b150003011 + b150003012 + b150003013 +
+    # b150003014 + b150003015 + b150003016
+    'b15003017': 'high_school', # those with high school diplomas only?
+                                # for GED too:  b150003017 + b150003018
+    'b17001002': 'poverty',
+    'b19013001': 'hhi',
+    'b22003002': 'food_stamps', # denominator of this is # of households
+    'b23025003': 'civilian_labor_force',
+    'b23025005': 'unemployment', # denominator of this is civilian labor force
+    #'': 'uninsured' # #%*&# is broken by age before status:
+    #'b27001005': 'uninsured',
+    #'b27001008': 'uninsured',
+    #'b27001011': 'uninsured',
+    #'b27001014': 'uninsured',
+    #'b27001017': 'uninsured',
+    #'b27001020': 'uninsured',
+    #'b27001023': 'uninsured',
+    #'b27001026': 'uninsured',
+    #'b27001029': 'uninsured',
+    #'b27001033': 'uninsured',
+    #'b27001036': 'uninsured',
+    #'b27001039': 'uninsured',
+    #'b27001042': 'uninsured',
+    #'b27001045': 'uninsured',
+    #'b27001048': 'uninsured',
+    #'b27001051': 'uninsured',
+    #'b27001054': 'uninsured',
+    #'b27001057': 'uninsured'
+
+}
+COLUMNS = COLUMNS.keys() # TODO should keep track of the dict values for column names?
 
 def get_agg_data(pgres, aug_name, id_):
     # TODO should use aug_name, not assume census_extract
     #stmt = 'SELECT * FROM census_extract WHERE ' \
     #        'geoid = \'14000US{}\''.format(str(id_).zfill(11))
     stmt = 'SELECT {} FROM census_extract WHERE ' \
-            'geoid = \'14000US{}\''.format(COLUMNS, str(id_).zfill(11))
+            'geoid = \'14000US{}\''.format(', '.join(COLUMNS), str(id_).zfill(11))
     pgres.execute(stmt)
     return pgres.fetchone()
 
@@ -56,7 +108,7 @@ def get_headers(pgres, aug_name):
     #              'FROM information_schema.columns '
     #              'WHERE table_name = \'census_extract\'')
     #headers = [c[0] for c in pgres.fetchall()]
-    headers = [c.replace('"', '') for c in COLUMNS.split(',')]
+    headers = [c.replace('"', '') for c in COLUMNS]
     headers.extend(('x', 'y', 'q', ))
     return headers
 
