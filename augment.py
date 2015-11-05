@@ -2,6 +2,7 @@
 # -*- coding: UTF-8 -*-
 # index.py
 
+import copy
 import csv
 import multiprocessing
 import rtree
@@ -38,7 +39,7 @@ class PostgresProcess(multiprocessing.Process):
         self._args = tuple(args)
 
 # TODO we should read these from config
-COLUMNS = {
+COLUMN_DICT = {
     'geoid': 'geoid',
     'geom': 'geom',
     'b01001001': 'population',
@@ -90,7 +91,28 @@ COLUMNS = {
     #'b27001057': 'uninsured'
 
 }
-COLUMNS = COLUMNS.keys() # TODO should keep track of the dict values for column names?
+COLUMNS = [
+    'geoid',
+    'geom',
+    'b01001001',
+    'b01001002',
+    'b01001026',
+    'b03002012',
+    'b03002006',
+    'b03002004',
+    'b03002003',
+    'b09001001',
+    'b09020001',
+    'b11001001',
+    'b14001002',
+    'B15003022',
+    'b15003017',
+    'b17001002',
+    'b19013001',
+    'b22003002',
+    'b23025003',
+    'b23025005'
+]
 
 def get_agg_data(pgres, aug_name, id_):
     # TODO should use aug_name, not assume census_extract
@@ -108,7 +130,7 @@ def get_headers(pgres, aug_name):
     #              'FROM information_schema.columns '
     #              'WHERE table_name = \'census_extract\'')
     #headers = [c[0] for c in pgres.fetchall()]
-    headers = [c.replace('"', '') for c in COLUMNS]
+    headers = copy.copy(COLUMNS)
     headers.extend(('x', 'y', 'q', ))
     return headers
 
@@ -118,6 +140,18 @@ def load_index(aug_name):
     Load pre-generated rtree index
     '''
     return rtree.Rtree('../data/{}.rtree'.format(aug_name))
+
+
+def create_output_table(pgres, columns):
+    '''
+    Create an augmented output table with the specified columns.  Just does
+    text for now.
+    '''
+    stmt = 'CREATE TABLE IF NOT EXISTS augmented ({});'.format(
+        ', '.join([c + ' TEXT' for c in columns]))
+    LOGGER.info(stmt)
+    pgres.execute(stmt)
+    pgres.connection.commit()
 
 
 def parse_input_csv(itx_q, latIdx, lonIdx, rtree_idx, pgres, aug_name, hashidx):
@@ -130,6 +164,8 @@ def parse_input_csv(itx_q, latIdx, lonIdx, rtree_idx, pgres, aug_name, hashidx):
             # TODO we don't want to output headers if we're putting into postgres,
             # this is where we should create our table
             #write_output_csv(row, headers)
+            row.extend(headers)
+            create_output_table(pgres, row)
             continue
 
         lat, lon = float(row[latIdx]), float(row[lonIdx])
@@ -141,13 +177,14 @@ def parse_input_csv(itx_q, latIdx, lonIdx, rtree_idx, pgres, aug_name, hashidx):
         else:
             matches = [o for o in rtree_idx.intersection((lon, lat, lon, lat))]
             if len(matches) == 0:
-                #LOGGER.warn('no rtree intersection for (lon, lat) %s, %s', lon, lat)
+                LOGGER.warn('no rtree intersection for (lon, lat) %s, %s', lon, lat)
                 write_output_csv(row, blank_row)
             else:
                 itx_q.put((row, lat, lon, blank_row, matches, ))
 
     for _ in range(NUM_PROCS):
         itx_q.put("STOP")
+
 
 def lonlat2xyq(lat, lon, z=31):
     # Converts a lat, lon to a QuadTree X-Y coordinate and QuadKey (x, y, q)
@@ -244,7 +281,7 @@ def main(latcolno, loncolno, aug_name):
         for process in itx_ps:
             process.join()
     except BaseException:
-        exc_type, exc_value, exc_traceback = sys.exc_info()
+        _, _, exc_traceback = sys.exc_info()
 
         for process in itx_ps:
             process.terminate()
