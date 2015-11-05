@@ -1,5 +1,4 @@
 Shapely==1.5.13
 ujson==1.33
-redis==2.10.3
 Rtree==0.8.2
 psycopg2
