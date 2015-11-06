@@ -87,8 +87,8 @@ COLUMN_DICT = {
 
 }
 COLUMNS = [
-    'geoid',
     'geom',
+    'geoid',
     'b01001001',
     'b01001002',
     'b01001026',
@@ -140,7 +140,7 @@ def create_output_table(pgres, columns):
     text for now.
     '''
     stmt = 'CREATE TABLE IF NOT EXISTS augmented ({});'.format(
-        ', '.join([c + ' TEXT' for c in columns]))
+        ', '.join([c + ' TEXT' for c in columns[1:]]))
     LOGGER.info(stmt)
     pgres.execute(stmt)
     pgres.connection.commit()
@@ -152,7 +152,7 @@ def parse_input_csv(itx_q, latIdx, lonIdx, pgres, aug_name, hashidx):
     for i, row in enumerate(reader):
         if i == 0:
             headers = get_headers(pgres, aug_name)
-            blank_row = ['' for _ in headers][2:]
+            blank_row = ['' for _ in headers][1:]
             # TODO we don't want to output headers if we're putting into postgres,
             # this is where we should create our table
             #write_output_csv(row, headers)
@@ -165,7 +165,7 @@ def parse_input_csv(itx_q, latIdx, lonIdx, pgres, aug_name, hashidx):
         hsh = (lat, lon, )
         if hsh in hashidx:
             augs = hashidx[hsh]
-            write_output_csv(row, augs[2:])
+            write_output_csv(row, augs[1:])
         else:
             itx_q.put((row, lat, lon, blank_row, ))
 
@@ -217,7 +217,7 @@ def augment_row(pgres, itx_q, hashidx, aug_name):
             augs.extend(agg_data)
             augs.extend(xyq)
             hashidx[hsh] = augs
-            write_output_csv(row, augs[2:])
+            write_output_csv(row, augs[1:])
         else:
             pass
 
