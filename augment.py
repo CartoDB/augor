@@ -5,21 +5,16 @@
 import copy
 import csv
 import multiprocessing
-import rtree
 import sys
 import logging
 import traceback
 import psycopg2
 from math import floor, sin, log, pi, radians
-from shapely.geometry import Point
-from shapely import speedups, wkb
 
 LOGGER = logging.getLogger(__name__)
 LOGGER.setLevel(logging.INFO)
 LOGGER.addHandler(logging.StreamHandler(sys.stderr))
 
-assert speedups.available == True
-speedups.enable()
 
 NUM_PROCS = multiprocessing.cpu_count()
 WRITER = csv.writer(sys.stdout)
@@ -114,12 +109,16 @@ COLUMNS = [
     'b23025005'
 ]
 
-def get_agg_data(pgres, aug_name, id_):
+def get_agg_data(pgres, aug_name, lat, lon):
     # TODO should use aug_name, not assume census_extract
     #stmt = 'SELECT * FROM census_extract WHERE ' \
     #        'geoid = \'14000US{}\''.format(str(id_).zfill(11))
-    stmt = 'SELECT {} FROM census_extract WHERE ' \
-            'geoid = \'14000US{}\''.format(', '.join(COLUMNS), str(id_).zfill(11))
+    stmt = 'SELECT {columns} FROM census_extract ce WHERE ' \
+           'geoid LIKE \'14000US%\' AND ' \
+           'ST_WITHIN(ST_SetSRID(ST_Point({lon}, {lat}), 4326), ce.geom)'.format(
+               columns=', '.join(COLUMNS),
+               lon=lon,
+               lat=lat)
     pgres.execute(stmt)
     return pgres.fetchone()
 
@@ -135,13 +134,6 @@ def get_headers(pgres, aug_name):
     return headers
 
 
-def load_index(aug_name):
-    '''
-    Load pre-generated rtree index
-    '''
-    return rtree.Rtree('../data/{}.rtree'.format(aug_name))
-
-
 def create_output_table(pgres, columns):
     '''
     Create an augmented output table with the specified columns.  Just does
@@ -154,7 +146,7 @@ def create_output_table(pgres, columns):
     pgres.connection.commit()
 
 
-def parse_input_csv(itx_q, latIdx, lonIdx, rtree_idx, pgres, aug_name, hashidx):
+def parse_input_csv(itx_q, latIdx, lonIdx, pgres, aug_name, hashidx):
     reader = csv.reader(sys.stdin)
 
     for i, row in enumerate(reader):
@@ -175,12 +167,7 @@ def parse_input_csv(itx_q, latIdx, lonIdx, rtree_idx, pgres, aug_name, hashidx):
             augs = hashidx[hsh]
             write_output_csv(row, augs[2:])
         else:
-            matches = [o for o in rtree_idx.intersection((lon, lat, lon, lat))]
-            if len(matches) == 0:
-                LOGGER.warn('no rtree intersection for (lon, lat) %s, %s', lon, lat)
-                write_output_csv(row, blank_row)
-            else:
-                itx_q.put((row, lat, lon, blank_row, matches, ))
+            itx_q.put((row, lat, lon, blank_row, ))
 
     for _ in range(NUM_PROCS):
         itx_q.put("STOP")
@@ -209,6 +196,7 @@ def lonlat2xyq(lat, lon, z=31):
     q = sum(((x & (1 << i)) << (i)) | ((y & (1 << i)) << (i+1)) for i in range(z))
     return (x, y, q)
 
+
 def augment_row(pgres, itx_q, hashidx, aug_name):
     '''
     Add augmentation columns to this row, checking against actual geometries
@@ -216,38 +204,22 @@ def augment_row(pgres, itx_q, hashidx, aug_name):
     '''
 
     for val in iter(itx_q.get, "STOP"):
-        row, lat, lon, blank_row, matches = val
+        row, lat, lon, blank_row = val
         augs = blank_row
 
         hsh = (lat, lon, )
 
         xyq = lonlat2xyq(lat, lon)
 
-        if len(matches) == 1:
-            augs = []
-            augs.extend(get_agg_data(pgres, aug_name, matches[0]))
+        augs = []
+        agg_data = get_agg_data(pgres, aug_name, lat, lon)
+        if agg_data:
+            augs.extend(agg_data)
             augs.extend(xyq)
             hashidx[hsh] = augs
+            write_output_csv(row, augs[2:])
         else:
-            for geoid in matches:
-                agg_data = get_agg_data(pgres, aug_name, geoid)
-                if agg_data:
-                    augs = []
-                    augs.extend(agg_data)
-                    augs.extend(xyq)
-                else:
-                    continue
-
-                try:
-                    geom = wkb.loads(augs[1].decode('hex'))
-                    if geom.contains(Point(lon, lat)):
-                        augs.extend(xyq)
-                        hashidx[hsh] = augs
-                        write_output_csv(row, augs[2:])
-                        break  # stop looping the possible shapes
-                except Exception as err:
-                    LOGGER.warn('Could not process geoid %s: %s',
-                                geoid, err)
+            pass
 
 
 def write_output_csv(val, augs):
@@ -263,8 +235,6 @@ def main(latcolno, loncolno, aug_name):
     hashidx = mgr.dict()
     pgres = psycopg2.connect('postgres:///census').cursor()
 
-    rtree_idx = load_index(aug_name) # Load rtree index
-
     # Create a process for calculating row intersections. Provide it shared memory objects
     itx_ps = [PostgresProcess(target=augment_row,
                               args=(itx_q, hashidx, aug_name))
@@ -275,7 +245,7 @@ def main(latcolno, loncolno, aug_name):
             process.start() # start each of our intersection processes
 
         # Start parsing the CSV
-        parse_input_csv(itx_q, int(latcolno), int(loncolno), rtree_idx, pgres,
+        parse_input_csv(itx_q, int(latcolno), int(loncolno), pgres,
                         aug_name, hashidx)
 
         for process in itx_ps:
