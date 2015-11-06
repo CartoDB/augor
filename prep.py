@@ -5,39 +5,18 @@ Prep an augmentation from a CSV with headers and a WKT column `geom`
 '''
 
 import sys
-import cPickle
-from shapely import speedups, wkb
-import rtree
 import os
 import csv
 import logging
 import ujson as json
 import psycopg2
 
-assert speedups.available == True
-speedups.enable()
 
 LOGGER = logging.getLogger(__name__)
 LOGGER.setLevel(logging.INFO)
 LOGGER.addHandler(logging.StreamHandler(sys.stderr))
 
 csv.field_size_limit(sys.maxsize)
-
-
-class FastRtree(rtree.Rtree):
-    def dumps(self, obj):
-        return cPickle.dumps(obj, -1)
-
-
-def populate_redis(r, aug_name, row):
-    geoid = row['geoid']
-    r.set('/'.join([aug_name, geoid]), json.dumps(row))
-
-
-def generate_rtree(idx, geoid, geom):
-    geom = wkb.loads(geom.decode('hex'))
-    geoid = geoid[-11:]
-    idx.insert(int(geoid), geom.bounds)
 
 
 def create_pgres_table(pgres):
@@ -94,7 +73,7 @@ def create_pgres_table(pgres):
     LOGGER.info(pgres.statusmessage)
 
     for seq_id, column_ids in sorted(columns_by_seq.iteritems()):
-        LOGGER.warn(seq_id)
+        LOGGER.info(seq_id)
         stmt = 'UPDATE census_extract ce SET {setclause} ' \
                 'FROM {seq_id} d ' \
                 'WHERE ce.geoid = d.geoid'.format(
@@ -107,39 +86,20 @@ def create_pgres_table(pgres):
                         ]
                     )
                 )
-        LOGGER.warn(stmt)
+        LOGGER.info(stmt)
         pgres.execute(stmt)
-        LOGGER.warn(pgres.statusmessage)
+        LOGGER.info(pgres.statusmessage)
+
+    stmt = 'CREATE INDEX ON census_extract USING GIST (geom)'
+    LOGGER.info(pgres.statusmessage)
+    pgres.execute(stmt)
+    LOGGER.info(pgres.statusmessage)
 
 def main(dirpath):
-    #aug_name = '.'.join(os.path.split(csv_path)[1].split('.')[0:-1])
-    aug_name = 'censustracts'
-    rtree_path = os.path.join(dirpath, aug_name) + '.rtree'
-
     with psycopg2.connect('postgres:///census') as conn:
         with conn.cursor() as pgres:
             create_pgres_table(pgres)
 
-            for fname in (rtree_path + '.dat', rtree_path +'.idx', ):
-                try:
-                    os.remove(fname)
-                except OSError:
-                    pass
-
-            idx = FastRtree(rtree_path)
-
-            stmt = 'SELECT geoid, geom FROM census_extract'
-            pgres.execute(stmt)
-            i = 0
-            for geoid, geom in pgres:
-                generate_rtree(idx, geoid, geom)
-                if i % 1000 == 0:
-                    LOGGER.info(i)
-                i += 1
-
 
 if __name__ == '__main__':
-    if len(sys.argv) == 2:
-        main(sys.argv[1])
-    else:
-        LOGGER.error('USAGE: python prep_augmentation.py <path/to/rtree>')
+    LOGGER.error('USAGE: python prep.py')
