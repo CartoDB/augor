@@ -95,11 +95,12 @@ def create_pgres_table(pgres):
     pgres.execute(stmt)
     LOGGER.info(pgres.statusmessage)
 
-def main(dirpath):
+def main():
     with psycopg2.connect('postgres:///census') as conn:
         with conn.cursor() as pgres:
             create_pgres_table(pgres)
 
 
 if __name__ == '__main__':
-    LOGGER.error('USAGE: python prep.py')
+    main()
+    #LOGGER.error('USAGE: python prep.py')
