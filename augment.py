@@ -10,84 +10,17 @@ import logging
 import traceback
 import psycopg2
 from math import floor, sin, log, pi, radians
+from itertools import izip_longest
 
 LOGGER = logging.getLogger(__name__)
 LOGGER.setLevel(logging.INFO)
 LOGGER.addHandler(logging.StreamHandler(sys.stderr))
 
 
-NUM_PROCS = multiprocessing.cpu_count()
-WRITER = csv.writer(sys.stdout)
+#NUM_PROCS = multiprocessing.cpu_count()
+NUM_PROCS = 18
 
-
-class PostgresProcess(multiprocessing.Process):
-    '''
-    A process with its own connection to postgres as first arg of run method.
-    '''
-
-    def __init__(self, *args, **kwargs):
-        super(PostgresProcess, self).__init__(*args, **kwargs)
-
-        self.pgres = psycopg2.connect('postgres:///census').cursor()
-        args = list(self._args)
-        args.insert(0, self.pgres)
-        self._args = tuple(args)
-
-# TODO we should read these from config
-COLUMN_DICT = {
-    'geoid': 'geoid',
-    'geom': 'geom',
-    'b01001001': 'population',
-    'b01001002': 'male',
-    'b01001026': 'female',
-    'b03002012': 'hispanic',
-    'b03002006': 'asian',
-    'b03002004': 'black',
-    'b03002003': 'white',
-    'b09001001': 'children', # under 18
-    'b09020001': 'seniors', # 65 and older
-    'b11001001': 'households',
-    'b14001002': 'school_enrollment',  # need grade school enrollment, not "detailed",
-                                       # this by default includes enrollment in college
-                                       # and grad school, not just grade school
-    'B15003022': 'bachelors', # would we want to assume people with
-                              # masters/doctorate have a bachelors too?  they would be excluded...
-    #'': 'no_high_school', # tough.. do we cut off at grade 9 on B15003?
-    # high school diploma vs. not?
-    # b150003002 + b150003003 + b150003004 + b150003005 +
-    # b150003006 + b150003007 + b150003008 + b150003009 +
-    # b150003010 + b150003011 + b150003012 + b150003013 +
-    # b150003014 + b150003015 + b150003016
-    'b15003017': 'high_school', # those with high school diplomas only?
-                                # for GED too:  b150003017 + b150003018
-    'b17001002': 'poverty',
-    'b19013001': 'hhi',
-    'b22003002': 'food_stamps', # denominator of this is # of households
-    'b23025003': 'civilian_labor_force',
-    'b23025005': 'unemployment', # denominator of this is civilian labor force
-    #'': 'uninsured' # #%*&# is broken by age before status:
-    #'b27001005': 'uninsured',
-    #'b27001008': 'uninsured',
-    #'b27001011': 'uninsured',
-    #'b27001014': 'uninsured',
-    #'b27001017': 'uninsured',
-    #'b27001020': 'uninsured',
-    #'b27001023': 'uninsured',
-    #'b27001026': 'uninsured',
-    #'b27001029': 'uninsured',
-    #'b27001033': 'uninsured',
-    #'b27001036': 'uninsured',
-    #'b27001039': 'uninsured',
-    #'b27001042': 'uninsured',
-    #'b27001045': 'uninsured',
-    #'b27001048': 'uninsured',
-    #'b27001051': 'uninsured',
-    #'b27001054': 'uninsured',
-    #'b27001057': 'uninsured'
-
-}
 COLUMNS = [
-    'geom',
     'geoid',
     'b01001001',
     'b01001002',
@@ -109,18 +42,52 @@ COLUMNS = [
     'b23025005'
 ]
 
-def get_agg_data(pgres, aug_name, lat, lon):
-    # TODO should use aug_name, not assume census_extract
-    #stmt = 'SELECT * FROM census_extract WHERE ' \
-    #        'geoid = \'14000US{}\''.format(str(id_).zfill(11))
-    stmt = 'SELECT {columns} FROM census_extract ce WHERE ' \
-           'geoid LIKE \'14000US%\' AND ' \
-           'ST_WITHIN(ST_SetSRID(ST_Point({lon}, {lat}), 4326), ce.geom)'.format(
-               columns=', '.join(COLUMNS),
-               lon=lon,
-               lat=lat)
-    pgres.execute(stmt)
-    return pgres.fetchone()
+CHUNK_SIZE = 10
+
+
+def grouper(iterable, n, fillvalue=None):
+    "Collect data into fixed-length chunks or blocks"
+    # grouper('ABCDEFG', 3, 'x') --> ABC DEF Gxx
+    args = [iter(iterable)] * n
+    return izip_longest(fillvalue=fillvalue, *args)
+
+
+class PostgresProcess(multiprocessing.Process):
+    '''
+    A process with its own connection to postgres as first arg of run method.
+    '''
+
+    def __init__(self, *args, **kwargs):
+        super(PostgresProcess, self).__init__(*args, **kwargs)
+
+        conn = psycopg2.connect('postgres:///census')
+        conn.set_isolation_level(0)
+        conn.set_session(autocommit=True, readonly=True)
+
+        self.pgres = conn.cursor()
+
+        # TODO should use aug_name, not assume census_extract
+        self.pgres.execute("prepare selectbylonlat as " \
+                          'SELECT {columns} FROM census_extract ce WHERE ' \
+                          'geoid LIKE \'14000US%\' AND (' \
+                          'ST_WITHIN(ST_SetSRID(ST_Point($1, $2), 4326), ce.geom) OR ' \
+                          'ST_WITHIN(ST_SetSRID(ST_Point($3, $4), 4326), ce.geom) OR ' \
+                          'ST_WITHIN(ST_SetSRID(ST_Point($5, $6), 4326), ce.geom) OR ' \
+                          'ST_WITHIN(ST_SetSRID(ST_Point($7, $8), 4326), ce.geom) OR ' \
+                          'ST_WITHIN(ST_SetSRID(ST_Point($9, $10), 4326), ce.geom)' \
+                          ')'.format(columns=', '.join(COLUMNS)))
+
+        args = list(self._args)
+        args.insert(0, self.pgres)
+        self._args = tuple(args)
+
+
+def get_agg_data(pgres, aug_name, fivelonlats):
+
+    pgres.execute('execute selectbylonlat (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)', fivelonlats)
+    return pgres.fetchall()
+   
+    #return COLUMNS
 
 
 def get_headers(pgres, aug_name):
@@ -146,28 +113,23 @@ def create_output_table(pgres, columns):
     pgres.connection.commit()
 
 
-def parse_input_csv(itx_q, latIdx, lonIdx, pgres, aug_name, hashidx):
+def parse_input_csv(itx_q, latIdx, lonIdx, pgres, aug_name):
     reader = csv.reader(sys.stdin)
 
-    for i, row in enumerate(reader):
-        if i == 0:
-            headers = get_headers(pgres, aug_name)
-            blank_row = ['' for _ in headers][1:]
-            # TODO we don't want to output headers if we're putting into postgres,
-            # this is where we should create our table
-            #write_output_csv(row, headers)
-            row.extend(headers)
-            create_output_table(pgres, row)
-            continue
-
-        lat, lon = float(row[latIdx]), float(row[lonIdx])
-
-        hsh = (lat, lon, )
-        if hsh in hashidx:
-            augs = hashidx[hsh]
-            write_output_csv(row, augs[1:])
-        else:
-            itx_q.put((row, lat, lon, blank_row, ))
+    #for i, row in enumerate(reader):
+        # TODO add this back
+        #if i == 0:
+        #    headers = get_headers(pgres, aug_name)
+        #    blank_row = ['' for _ in headers][1:]
+        #    # TODO we don't want to output headers if we're putting into postgres,
+        #    # this is where we should create our table
+        #    #write_output_csv(row, headers)
+        #    row.extend(headers)
+        #    create_output_table(pgres, row)
+        #    continue
+    CHUNK_SIZE = 5
+    for rows in grouper(reader, CHUNK_SIZE):
+        itx_q.put((rows, latIdx, lonIdx, ))
 
     for _ in range(NUM_PROCS):
         itx_q.put("STOP")
@@ -197,47 +159,50 @@ def lonlat2xyq(lat, lon, z=31):
     return (x, y, q)
 
 
-def augment_row(pgres, itx_q, hashidx, aug_name):
+def augment_row(pgres, itx_q, aug_name):
     '''
     Add augmentation columns to this row, checking against actual geometries
     from postgres if necessary.
     '''
 
+    writer = csv.writer(sys.stdout)
     for val in iter(itx_q.get, "STOP"):
-        row, lat, lon, blank_row = val
-        augs = blank_row
 
-        hsh = (lat, lon, )
+        rows, latIdx, lonIdx = val
+        for row in rows:
 
-        xyq = lonlat2xyq(lat, lon)
-
-        augs = []
-        agg_data = get_agg_data(pgres, aug_name, lat, lon)
-        if agg_data:
-            augs.extend(agg_data)
-            augs.extend(xyq)
-            hashidx[hsh] = augs
-            write_output_csv(row, augs[1:])
-        else:
-            pass
-
-
-def write_output_csv(val, augs):
-    # TODO deal with multiple augments?
-    val.extend(augs)
-    WRITER.writerow(val)
+            try:
+                lat, lon = float(row[latIdx]), float(row[lonIdx])
+            except TypeError:
+                continue
+            except ValueError:
+                continue
+            row.extend(lonlat2xyq(lat, lon))
+    
+            #agg_data = get_agg_data(pgres, aug_name, lon, lat)
+            #if agg_data:
+            #    row.extend(agg_data)
+            #else:
+            #    pass
+            #writer.writerow(row)
+        for i, agg in enumerate(get_agg_data(pgres, aug_name,
+                                [rows[0][lonIdx], rows[0][latIdx],
+                                rows[1][lonIdx], rows[1][latIdx],
+                                rows[2][lonIdx], rows[2][latIdx],
+                                rows[3][lonIdx], rows[3][latIdx],
+                                rows[4][lonIdx], rows[4][latIdx]])):
+            rows[i].extend(agg)
+        writer.writerows(rows)
 
 
 def main(latcolno, loncolno, aug_name):
     itx_q = multiprocessing.Queue() # Our intersection job queue
 
-    mgr = multiprocessing.Manager()
-    hashidx = mgr.dict()
     pgres = psycopg2.connect('postgres:///census').cursor()
 
     # Create a process for calculating row intersections. Provide it shared memory objects
     itx_ps = [PostgresProcess(target=augment_row,
-                              args=(itx_q, hashidx, aug_name))
+                              args=(itx_q, aug_name))
               for _ in range(NUM_PROCS)]
 
     try:
@@ -246,7 +211,7 @@ def main(latcolno, loncolno, aug_name):
 
         # Start parsing the CSV
         parse_input_csv(itx_q, int(latcolno), int(loncolno), pgres,
-                        aug_name, hashidx)
+                        aug_name)
 
         for process in itx_ps:
             process.join()
