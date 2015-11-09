@@ -172,21 +172,15 @@ def augment_row(pgres, itx_q, out_q, aug_name):
             else:
                 #LOGGER.warn('missing augmentation for row %s', i)
                 row.extend([None for _ in COLUMNS])
-            #writer.writerow(row)
-        #writer.writerows(rows[0:i])
-        out_q.put(rows[0:i])
+        out_q.put(rows)
 
 
 def write_rows(out_q):
     writer = csv.writer(sys.stdout)
     for rows in iter(out_q.get, "STOP"):
-        writer.writerows(rows)
-        #for row in rows:
-        #    if len(row) < 35:
-        #        LOGGER.warn(row)
-        #    else:
-        #        pass
-        #    writer.writerow(row)
+        for row in rows:
+            if row:
+                writer.writerow(row)
 
 
 def main(latcolno, loncolno, aug_name):
