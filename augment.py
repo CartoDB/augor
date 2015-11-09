@@ -17,8 +17,7 @@ LOGGER.setLevel(logging.INFO)
 LOGGER.addHandler(logging.StreamHandler(sys.stderr))
 
 
-#NUM_PROCS = multiprocessing.cpu_count()
-NUM_PROCS = 2
+NUM_PROCS = multiprocessing.cpu_count()
 
 COLUMNS = [
     'geoid',
@@ -42,7 +41,7 @@ COLUMNS = [
     'b23025005'
 ]
 
-CHUNK_SIZE = 20
+CHUNK_SIZE = 10
 
 
 def grouper(iterable, n, fillvalue=None):
