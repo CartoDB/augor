@@ -170,12 +170,11 @@ def augment_row(pgres, itx_q, out_q, aug_name):
             if agg_data:
                 row.extend(agg_data)
             else:
-                LOGGER.warn('missing augmentation for row %s', i)
+                #LOGGER.warn('missing augmentation for row %s', i)
                 row.extend([None for _ in COLUMNS])
             #writer.writerow(row)
         #writer.writerows(rows[0:i])
         out_q.put(rows[0:i])
-    out_q.put("STOP")
 
 
 def write_rows(out_q):
@@ -218,6 +217,7 @@ def main(latcolno, loncolno, aug_name):
 
         for process in itx_ps:
             process.join()
+        out_q.put("STOP")
         out_ps.join()
     except BaseException:
         _, _, exc_traceback = sys.exc_info()
