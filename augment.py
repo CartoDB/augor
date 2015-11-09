@@ -18,7 +18,7 @@ LOGGER.addHandler(logging.StreamHandler(sys.stderr))
 
 
 #NUM_PROCS = multiprocessing.cpu_count()
-NUM_PROCS = 18
+NUM_PROCS = 2
 
 COLUMNS = [
     'geoid',
@@ -42,7 +42,7 @@ COLUMNS = [
     'b23025005'
 ]
 
-CHUNK_SIZE = 10
+CHUNK_SIZE = 20
 
 
 def grouper(iterable, n, fillvalue=None):
@@ -67,26 +67,30 @@ class PostgresProcess(multiprocessing.Process):
         self.pgres = conn.cursor()
 
         # TODO should use aug_name, not assume census_extract
-        self.pgres.execute("prepare selectbylonlat as " \
-                          'SELECT {columns} FROM census_extract ce WHERE ' \
-                          'geoid LIKE \'14000US%\' AND (' \
-                          'ST_WITHIN(ST_SetSRID(ST_Point($1, $2), 4326), ce.geom) OR ' \
-                          'ST_WITHIN(ST_SetSRID(ST_Point($3, $4), 4326), ce.geom) OR ' \
-                          'ST_WITHIN(ST_SetSRID(ST_Point($5, $6), 4326), ce.geom) OR ' \
-                          'ST_WITHIN(ST_SetSRID(ST_Point($7, $8), 4326), ce.geom) OR ' \
-                          'ST_WITHIN(ST_SetSRID(ST_Point($9, $10), 4326), ce.geom)' \
-                          ')'.format(columns=', '.join(COLUMNS)))
+
+        # pre-generate select by chunk
+        self.pgres.execute(
+            "prepare selectbylonlat as " \
+            'SELECT {columns} FROM census_extract ce WHERE ' \
+            'geoid LIKE \'14000US%\' AND ({st_within})' \
+            .format(columns=', '.join(COLUMNS),
+                    st_within=' OR '.join([
+                        'ST_WITHIN(ST_SetSRID(ST_Point(${lon}, ${lat}), 4326), ce.geom)'.format(
+                            lon=(x*2)+1, lat=(x*2)+2
+                        )
+                        for x in xrange(0, CHUNK_SIZE)])))
 
         args = list(self._args)
         args.insert(0, self.pgres)
         self._args = tuple(args)
 
 
-def get_agg_data(pgres, aug_name, fivelonlats):
+def get_agg_data(pgres, aug_name, chunklonlats):
 
-    pgres.execute('execute selectbylonlat (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)', fivelonlats)
+    pgres.execute('execute selectbylonlat({})'.format(
+        ', '.join('%s' for _ in xrange(0, CHUNK_SIZE * 2))), chunklonlats)
     return pgres.fetchall()
-   
+
     #return COLUMNS
 
 
@@ -127,7 +131,7 @@ def parse_input_csv(itx_q, latIdx, lonIdx, pgres, aug_name):
         #    row.extend(headers)
         #    create_output_table(pgres, row)
         #    continue
-    CHUNK_SIZE = 5
+    _ = reader.next()
     for rows in grouper(reader, CHUNK_SIZE):
         itx_q.put((rows, latIdx, lonIdx, ))
 
@@ -169,7 +173,10 @@ def augment_row(pgres, itx_q, aug_name):
     for val in iter(itx_q.get, "STOP"):
 
         rows, latIdx, lonIdx = val
-        for row in rows:
+        lonlats = [(r[lonIdx], r[latIdx]) for r in rows]
+        flat_lonlat = [item for sublist in lonlats for item in sublist]
+        for i, agg_data in enumerate(get_agg_data(pgres, aug_name, flat_lonlat)):
+            row = rows[i]
 
             try:
                 lat, lon = float(row[latIdx]), float(row[lonIdx])
@@ -178,20 +185,13 @@ def augment_row(pgres, itx_q, aug_name):
             except ValueError:
                 continue
             row.extend(lonlat2xyq(lat, lon))
-    
+
             #agg_data = get_agg_data(pgres, aug_name, lon, lat)
-            #if agg_data:
-            #    row.extend(agg_data)
-            #else:
-            #    pass
+            if agg_data:
+                row.extend(agg_data)
+            else:
+                pass
             #writer.writerow(row)
-        for i, agg in enumerate(get_agg_data(pgres, aug_name,
-                                [rows[0][lonIdx], rows[0][latIdx],
-                                rows[1][lonIdx], rows[1][latIdx],
-                                rows[2][lonIdx], rows[2][latIdx],
-                                rows[3][lonIdx], rows[3][latIdx],
-                                rows[4][lonIdx], rows[4][latIdx]])):
-            rows[i].extend(agg)
         writer.writerows(rows)
 
 
