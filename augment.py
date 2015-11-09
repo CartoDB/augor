@@ -2,7 +2,6 @@
 # -*- coding: UTF-8 -*-
 # index.py
 
-import copy
 import csv
 import multiprocessing
 import sys
@@ -18,6 +17,7 @@ LOGGER.addHandler(logging.StreamHandler(sys.stderr))
 
 
 NUM_PROCS = multiprocessing.cpu_count()
+#NUM_PROCS = 1
 
 COLUMNS = [
     'geoid',
@@ -73,34 +73,26 @@ class PostgresProcess(multiprocessing.Process):
             'SELECT {columns} FROM census_extract ce WHERE ' \
             'geoid LIKE \'14000US%\' AND ({st_within})' \
             .format(columns=', '.join(COLUMNS),
-                    st_within=' OR '.join([
-                        'ST_WITHIN(ST_SetSRID(ST_Point(${lon}, ${lat}), 4326), ce.geom)'.format(
-                            lon=(x*2)+1, lat=(x*2)+2
-                        )
-                        for x in xrange(0, CHUNK_SIZE)])))
+                    st_within='ST_WITHIN(ST_SetSRID(ST_Point($1, $2), 4326), ce.geom)'))
 
         args = list(self._args)
         args.insert(0, self.pgres)
         self._args = tuple(args)
 
 
-def get_agg_data(pgres, aug_name, chunklonlats):
-
-    pgres.execute('execute selectbylonlat({})'.format(
-        ', '.join('%s' for _ in xrange(0, CHUNK_SIZE * 2))), chunklonlats)
-    return pgres.fetchall()
-
-    #return COLUMNS
+def get_agg_data(pgres, aug_name, lon, lat):
+    pgres.execute('execute selectbylonlat(%s, %s)', (lon, lat, ))
+    return pgres.fetchone()
 
 
-def get_headers(pgres, aug_name):
+def get_aug_headers(pgres, aug_name):
     # TODO should use aug_name, not assume census_extract
     #pgres.execute('SELECT column_name '
     #              'FROM information_schema.columns '
     #              'WHERE table_name = \'census_extract\'')
     #headers = [c[0] for c in pgres.fetchall()]
-    headers = copy.copy(COLUMNS)
-    headers.extend(('x', 'y', 'q', ))
+    headers = ['x', 'y', 'q']
+    headers.extend(COLUMNS)
     return headers
 
 
@@ -109,28 +101,20 @@ def create_output_table(pgres, columns):
     Create an augmented output table with the specified columns.  Just does
     text for now.
     '''
-    stmt = 'CREATE TABLE IF NOT EXISTS augmented ({});'.format(
-        ', '.join([c + ' TEXT' for c in columns[1:]]))
+    stmt = 'DROP TABLE IF EXISTS augmented;'
+    LOGGER.info(stmt)
+    pgres.execute(stmt)
+    pgres.connection.commit()
+    stmt = 'CREATE TABLE augmented ({});'.format(
+        ', '.join([c + ' TEXT' for c in columns]))
     LOGGER.info(stmt)
     pgres.execute(stmt)
     pgres.connection.commit()
 
 
-def parse_input_csv(itx_q, latIdx, lonIdx, pgres, aug_name):
+def parse_input_csv(itx_q, out_q, latIdx, lonIdx, pgres, aug_name):
     reader = csv.reader(sys.stdin)
 
-    #for i, row in enumerate(reader):
-        # TODO add this back
-        #if i == 0:
-        #    headers = get_headers(pgres, aug_name)
-        #    blank_row = ['' for _ in headers][1:]
-        #    # TODO we don't want to output headers if we're putting into postgres,
-        #    # this is where we should create our table
-        #    #write_output_csv(row, headers)
-        #    row.extend(headers)
-        #    create_output_table(pgres, row)
-        #    continue
-    _ = reader.next()
     for rows in grouper(reader, CHUNK_SIZE):
         itx_q.put((rows, latIdx, lonIdx, ))
 
@@ -162,63 +146,85 @@ def lonlat2xyq(lat, lon, z=31):
     return (x, y, q)
 
 
-def augment_row(pgres, itx_q, aug_name):
+def augment_row(pgres, itx_q, out_q, aug_name):
     '''
     Add augmentation columns to this row, checking against actual geometries
     from postgres if necessary.
     '''
 
-    writer = csv.writer(sys.stdout)
+    #writer = csv.writer(sys.stdout)
     for val in iter(itx_q.get, "STOP"):
 
         rows, latIdx, lonIdx = val
-        lonlats = [(r[lonIdx], r[latIdx]) for r in rows]
-        flat_lonlat = [item for sublist in lonlats for item in sublist]
-        for i, agg_data in enumerate(get_agg_data(pgres, aug_name, flat_lonlat)):
-            row = rows[i]
 
-            try:
-                lat, lon = float(row[latIdx]), float(row[lonIdx])
-            except TypeError:
-                continue
-            except ValueError:
-                continue
+        #lonlats = [(r[lonIdx], r[latIdx]) for r in rows if r]
+        #flat_lonlat = [item for sublist in lonlats for item in sublist]
+        for i, row in enumerate(rows):
+            if not row:
+                break
+            lat, lon = float(row[latIdx]), float(row[lonIdx])
+
             row.extend(lonlat2xyq(lat, lon))
 
-            #agg_data = get_agg_data(pgres, aug_name, lon, lat)
+            agg_data = get_agg_data(pgres, aug_name, lon, lat)
             if agg_data:
                 row.extend(agg_data)
             else:
-                pass
+                LOGGER.warn('missing augmentation for row %s', i)
+                row.extend([None for _ in COLUMNS])
             #writer.writerow(row)
+        #writer.writerows(rows[0:i])
+        out_q.put(rows[0:i])
+    out_q.put("STOP")
+
+
+def write_rows(out_q):
+    writer = csv.writer(sys.stdout)
+    for rows in iter(out_q.get, "STOP"):
         writer.writerows(rows)
+        #for row in rows:
+        #    if len(row) < 35:
+        #        LOGGER.warn(row)
+        #    else:
+        #        pass
+        #    writer.writerow(row)
 
 
 def main(latcolno, loncolno, aug_name):
     itx_q = multiprocessing.Queue() # Our intersection job queue
+    out_q = multiprocessing.Queue() # Our output queue
 
     pgres = psycopg2.connect('postgres:///census').cursor()
 
+    reader = csv.reader(sys.stdin)
+    headers = reader.next()
+    headers.extend(get_aug_headers(pgres, aug_name))
+    create_output_table(pgres, headers)
+
     # Create a process for calculating row intersections. Provide it shared memory objects
-    itx_ps = [PostgresProcess(target=augment_row,
-                              args=(itx_q, aug_name))
+    itx_ps = [PostgresProcess(target=augment_row, args=(itx_q, out_q, aug_name))
               for _ in range(NUM_PROCS)]
+
+    out_ps = multiprocessing.Process(target=write_rows, args=(out_q,))
 
     try:
         for process in itx_ps:
             process.start() # start each of our intersection processes
+        out_ps.start()
 
         # Start parsing the CSV
-        parse_input_csv(itx_q, int(latcolno), int(loncolno), pgres,
+        parse_input_csv(itx_q, out_q, int(latcolno), int(loncolno), pgres,
                         aug_name)
 
         for process in itx_ps:
             process.join()
+        out_ps.join()
     except BaseException:
         _, _, exc_traceback = sys.exc_info()
 
         for process in itx_ps:
             process.terminate()
+        out_ps.terminate()
 
         LOGGER.error(traceback.format_tb(exc_traceback))
         LOGGER.error(traceback.format_exc())
