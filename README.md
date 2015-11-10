@@ -109,5 +109,5 @@ You'll want to run augmentation from the pipe provided by cerberus:
 On an 8-core Macbook Pro, matching points to census tracts, augmenting, and
 piping into SQL runs at about 2400 rows per second.
 
-On a 36-core AWS compute-optimized instance, the same task runs at about 4800
+On a 36-core AWS compute-optimized instance, the same task runs at about 22000
 rows per second.
