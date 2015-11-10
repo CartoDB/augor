@@ -2,11 +2,8 @@
 
 while read line
 do
-  url=$(echo "$line" | cut -f 1)
-  name=$(echo "$line" | cut -f 2)
-  lat=$(echo "$line" | cut -f 3)
-  lon=$(echo "$line" | cut -f 4)
-  augments=$(echo "$line" | cut -f 5)
+  url=$(echo "$line" | cut -d ' ' -f 1)
+  metadata=$(echo "$line" | cut -d ' ' -f 2)
 
-  curl -s "$url" | tail -n +2 | python ../augor/augment.py $lat $lon $augments > $name.csv 2>$name.log &
+  curl -s "$url" | python ../augor/augment.py $metadata
 done
