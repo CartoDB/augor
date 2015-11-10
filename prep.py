@@ -5,7 +5,6 @@ Prep an augmentation from a CSV with headers and a WKT column `geom`
 '''
 
 import sys
-import os
 import csv
 import logging
 import ujson as json
@@ -58,8 +57,8 @@ def create_pgres_table(pgres):
                   ' NOT NULL, '
                   'geom GEOMETRY NOT NULL, {data}, {moe})'
                   .format(
-                      data=', '.join(['"{}" DOUBLE PRECISION'.format(cid.lower()) for cid in column_ids]),
-                      moe=', '.join(['"{}_moe" DOUBLE PRECISION'.format(cid.lower()) for cid in column_ids]),
+                      data=', '.join(['"{}" DOUBLE PRECISION'.format(cid.lower()) for cid in column_ids if not cid.endswith('.5')]),
+                      moe=', '.join(['"{}_moe" DOUBLE PRECISION'.format(cid.lower()) for cid in column_ids if not cid.endswith('.5')]),
                   )
                  )
     LOGGER.info(pgres.statusmessage)
