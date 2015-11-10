@@ -3,8 +3,7 @@
 INPUT=$1
 WC=$(wc -l $1)
 FILESIZE=$(echo $WC | cut -d ' ' -f 1)
-time cat $1 | python augment.py $2 $3 $4 | pv -a -r -p -e -l -s $FILESIZE \
-    | psql -d census -c 'begin; select pg_sleep(1); commit; begin; COPY augmented FROM stdin WITH CSV; commit;'
+time cat $1 | python augment.py $2 | pv -a -r -p -e -l -s $FILESIZE | psql -d census
 
-# example (if you have created a `temp` table with appropriate columns):
-# ./run.sh ../data/public.csv 5 6 censustracts
+# example
+# ./run.sh ../data/taxi.csv https://s3.amazonaws.com/cartodb-cerberus-test/taxis.json

@@ -4,13 +4,12 @@
 
 Install pre-reqs (on mac):
 
-    brew install postgresql postgis pv spatialindex
+    brew install postgresql postgis pv
     pip install -r requirements.txt
 
 Or on Debian flavor:
 
-    sudo apt-get install python-pip python-dev curl pv libspatialindex-dev \
-                         libgeos-dev
+    sudo apt-get install python-pip python-dev curl pv
 
 And after [adding postgres 9.4 apt
 repo](http://www.unixmen.com/install-postgresql-9-4-phppgadmin-ubuntu-14-10/):
@@ -18,7 +17,6 @@ repo](http://www.unixmen.com/install-postgresql-9-4-phppgadmin-ubuntu-14-10/):
     sudo apt-get install postgresql-9.4 postgresql-9.2-postgis-2.1 \
                          postgresql-contrib-9.4 postgresql-9.4-postgis-scripts \
                          libpq-dev
-
 
 To augment a dataset with census data, you'll need census data -- fortunately,
 the good people at [censusreporter](https://github.com/censusreporter) have
@@ -61,30 +59,26 @@ You'll want to make sure that postgis is enabled:
     curl https://s3.amazonaws.com/census-backup/tiger/2012/tiger2012_backup.sql.gz | gunzip -c | psql -d census
 
 Once you've populated postgres, you need to prep the augmentation flow.  This
-means generating a derived table with columns of data we're interested in, as
-well as an rtree for faster spatial processing.  You need to provide a data
-path where it will create the rtree:
+means generating a derived table with columns of data we're interested.
 
-    pip install -r requirements.txt # you may want to do this in a virtualenv
-    python prep.py path/to/rtree
+    pip install -r requirements.txt  # you may want to do this in a virtualenv
+    python prep.py
 
 Currently, this assumes that the existing user can read, write, and create
 tables on the `census` database using trust authentication.
 
-Once the rtree has been created and the postgres table `census_extract` exists
-on the `public` schema, we're ready to run an input CSV through augmentation.
-`./augment.py` outputs COPY-ready SQL, so you can pipe it directly into `psql`.
+Once  the postgres table `census_extract` exists on the `public` schema, we're
+ready to run an input CSV through augmentation.  `./augment.py` outputs
+COPY-ready SQL, so you can pipe it directly into `psql`.
 
-Right now, a table is not created automatically for the output, so you'll need
-to create it yourself, with appropriate types:
-
-    psql -d census
-    # CREATE TABLE t ( ... )
+An output table will automatically be generated using the table's `name` in the
+metadata.
 
 Then you should be able to pipe in the data using COPY:
 
-    cat path/to/input.csv | python augment.py <latcolno> <loncolno> census | \
-        psql -c 'COPY t FROM stdin WITH CSV'
+    cat path/to/input.csv | python augment.py <metadata url> | psql
+
+The table will be created in whatever database `psql` connects to.
 
 If you want to time progress as it's happening and get stats on time for the
 process, you can save the input filesize and use `pv`:
@@ -92,9 +86,13 @@ process, you can save the input filesize and use `pv`:
     INPUT=path/to/input.csv
     WC=$(wc -l $INPUT)
     FILESIZE=$(echo $WC | cut -d ' ' -f 1)
-    time cat $INPUT | python augment.py <latcolno> <loncolno> censustracts | \
+    time cat $INPUT | python augment.py <METADATA_URL> | \
          pv -a -p -e -l -s $FILESIZE | \
-         psql -d census -c 'COPY augmented FROM stdin WITH csv'
+         psql
+
+This script is wrapped up in `./run.sh` and can be executed as follows:
+
+    ./run.sh <PATH_TO_DATA> <METADATA_URL>
 
 Note that it is dependent on having a static input file -- if you're working
 with an input stream, you'll need to get the size data from elsewhere to get a
@@ -104,13 +102,12 @@ progress meter.
 
 You'll want to run augmentation from the pipe provided by cerberus:
 
-    cat ../cerberus/pipe | ./augment.sh | psql -c 'COPY t FROM stdin WITH CSV'
-
+    cat ../cerberus/pipe | ./augment.sh | psql
 
 ## Benchmarks
 
 On an 8-core Macbook Pro, matching points to census tracts, augmenting, and
-piping into SQL runs at about 1800 rows per second.
+piping into SQL runs at about 2400 rows per second.
 
-On a 32-core AWS compute-optimized instance, the same task runs at about 4800
+On a 36-core AWS compute-optimized instance, the same task runs at about 4800
 rows per second.

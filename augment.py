@@ -8,6 +8,8 @@ import sys
 import logging
 import traceback
 import psycopg2
+import json
+import urllib2
 from math import floor, sin, log, pi, radians
 from itertools import izip_longest
 
@@ -19,111 +21,129 @@ LOGGER.addHandler(logging.StreamHandler(sys.stderr))
 NUM_PROCS = multiprocessing.cpu_count()
 #NUM_PROCS = 1
 
-COLUMNS = [
-    'geoid',
-    'b01001001',
-    'b01001002',
-    'b01001026',
-    'b03002012',
-    'b03002006',
-    'b03002004',
-    'b03002003',
-    'b09001001',
-    'b09020001',
-    'b11001001',
-    'b14001002',
-    'B15003022',
-    'b15003017',
-    'b17001002',
-    'b19013001',
-    'b22003002',
-    'b23025003',
-    'b23025005'
-]
+#COLUMNS = [
+#    'geoid',
+#    'b01001001',
+#    'b01001002',
+#    'b01001026',
+#    'b03002012',
+#    'b03002006',
+#    'b03002004',
+#    'b03002003',
+#    'b09001001',
+#    'b09020001',
+#    'b11001001',
+#    'b14001002',
+#    'B15003022',
+#    'b15003017',
+#    'b17001002',
+#    'b19013001',
+#    'b22003002',
+#    'b23025003',
+#    'b23025005'
+#]
 
 CHUNK_SIZE = 10
 
 
-def grouper(iterable, n, fillvalue=None):
-    "Collect data into fixed-length chunks or blocks"
+def grouper(iterable, size, fillvalue=None):
+    '''
+    Collect data into fixed-length chunks or blocks
+    '''
     # grouper('ABCDEFG', 3, 'x') --> ABC DEF Gxx
-    args = [iter(iterable)] * n
+    args = [iter(iterable)] * size
     return izip_longest(fillvalue=fillvalue, *args)
 
 
-class PostgresProcess(multiprocessing.Process):
+def get_aug_data(pgres, lon, lat):
     '''
-    A process with its own connection to postgres as first arg of run method.
+    Return augmented data by lon/lat.
     '''
-
-    def __init__(self, *args, **kwargs):
-        super(PostgresProcess, self).__init__(*args, **kwargs)
-
-        conn = psycopg2.connect('postgres:///census')
-        conn.set_isolation_level(0)
-        conn.set_session(autocommit=True, readonly=True)
-
-        self.pgres = conn.cursor()
-
-        # TODO should use aug_name, not assume census_extract
-
-        # pre-generate select by chunk
-        self.pgres.execute(
-            "prepare selectbylonlat as " \
-            'SELECT {columns} FROM census_extract ce WHERE ' \
-            'geoid LIKE \'14000US%\' AND ({st_within})' \
-            .format(columns=', '.join(COLUMNS),
-                    st_within='ST_WITHIN(ST_SetSRID(ST_Point($1, $2), 4326), ce.geom)'))
-
-        args = list(self._args)
-        args.insert(0, self.pgres)
-        self._args = tuple(args)
-
-
-def get_agg_data(pgres, aug_name, lon, lat):
     pgres.execute('execute selectbylonlat(%s, %s)', (lon, lat, ))
     return pgres.fetchone()
 
 
-def get_aug_headers(pgres, aug_name):
-    # TODO should use aug_name, not assume census_extract
-    #pgres.execute('SELECT column_name '
-    #              'FROM information_schema.columns '
-    #              'WHERE table_name = \'census_extract\'')
-    #headers = [c[0] for c in pgres.fetchall()]
-    headers = ['x', 'y', 'q']
-    headers.extend(COLUMNS)
-    return headers
-
-
-def create_output_table(pgres, columns):
+def tabletype(configtype):
     '''
-    Create an augmented output table with the specified columns.  Just does
-    text for now.
+    Convert a config column type to something usable in postgres.  Hopefully
+    can be eliminated eventually.
     '''
-    stmt = 'DROP TABLE IF EXISTS augmented;'
-    LOGGER.info(stmt)
-    pgres.execute(stmt)
-    pgres.connection.commit()
-    stmt = 'CREATE TABLE augmented ({});'.format(
-        ', '.join([c + ' TEXT' for c in columns]))
-    LOGGER.info(stmt)
-    pgres.execute(stmt)
-    pgres.connection.commit()
+    if configtype in ('longitude', 'latitude'):
+        return 'float'
+    return configtype
 
 
-def parse_input_csv(itx_q, out_q, latIdx, lonIdx, pgres, aug_name):
-    reader = csv.reader(sys.stdin)
+def create_output_table(config):
+    '''
+    Create an augmented output table with the specified columns.
+    Prints commands needed to COPY into this new table to STDOUT.
+    '''
+    tablename = config['table']['name']
+    stmt = 'DROP TABLE IF EXISTS "{name}";\n'.format(name=tablename)
+    LOGGER.debug(stmt)
+    sys.stdout.write(stmt)
+
+    columndef = [{
+        'name': c['attr'],
+        'type': tabletype(c['type'])
+    } for c in config['attributes']]
+
+    # TODO how we should actually handle quadkey
+    columndef += [{
+        'name': 'x',
+        'type': 'int8'
+    }, {
+        'name': 'y',
+        'type': 'int8'
+    }, {
+        'name': 'q',
+        'type': 'int8'
+    }]
+
+    stmt = 'CREATE TABLE "{name}" ({columns});\n'.format(
+        name=tablename,
+        columns=', '.join(['{name} {type}'.format(**c) for c in columndef])
+    )
+    LOGGER.debug(stmt)
+    sys.stdout.write(stmt)
+
+    stmt = 'COPY {name} FROM stdin WITH CSV;\n'.format(name=tablename)
+    LOGGER.debug(stmt)
+    sys.stdout.write(stmt)
+
+
+def find_lon_lat_column_idxs(config):
+    '''
+    Determine lon/lat column indexes from config file. Returns tuple (lon_idx,
+    lat_idx).
+    '''
+    for i, col in enumerate(config['attributes']):
+        if col['type'] == 'latitude':
+            lat_idx = i
+        elif col['type'] == 'longitude':
+            lon_idx = i
+    return (lon_idx, lat_idx)
+
+
+def parse_input_csv(itx_q, config):
+    '''
+    Read input CSV, sending chunks of rows to the itx_q and telling them to
+    stop when everything is done reading.
+    '''
+    reader = csv.reader(sys.stdin,
+                        delimiter=str(config.get('csv', {}).get('separator', ',')))
 
     for rows in grouper(reader, CHUNK_SIZE):
-        itx_q.put((rows, latIdx, lonIdx, ))
+        itx_q.put(rows)
 
     for _ in range(NUM_PROCS):
         itx_q.put("STOP")
 
 
 def lonlat2xyq(lat, lon, z=31):
-    # Converts a lat, lon to a QuadTree X-Y coordinate and QuadKey (x, y, q)
+    '''
+    Converts a lat, lon to a QuadTree X-Y coordinate and QuadKey (x, y, q)
+    '''
     lat = lat if lat <= 85.05112878 else 85.05112878
     lat = lat if lat >= -85.05112878 else -85.05112878
     lon = lon if lon <= 180 else 180
@@ -146,36 +166,52 @@ def lonlat2xyq(lat, lon, z=31):
     return (x, y, q)
 
 
-def augment_row(pgres, itx_q, out_q, aug_name):
+def augment_row(itx_q, out_q, lon_idx, lat_idx, config):
     '''
     Add augmentation columns to this row, checking against actual geometries
     from postgres if necessary.
     '''
 
+    conn = psycopg2.connect('postgres:///census')
+    conn.set_isolation_level(0)
+    conn.set_session(autocommit=True, readonly=True)
+
+    pgres = conn.cursor()
+
+    # prepare query for the attributes we need
+    # TODO should not use `census_extract` table
+    columns = [col['augmentation']['code'] for
+               col in config['attributes'] if 'augmentation' in col]
+    pgres.execute(
+        "prepare selectbylonlat as " \
+        'SELECT {columns} FROM census_extract ce WHERE ' \
+        'geoid LIKE \'14000US%\' AND ({st_within})' \
+        .format(columns=', '.join(columns),
+                st_within='ST_WITHIN(ST_SetSRID(ST_Point($1, $2), 4326), ce.geom)'))
+
     #writer = csv.writer(sys.stdout)
-    for val in iter(itx_q.get, "STOP"):
+    for rows in iter(itx_q.get, "STOP"):
 
-        rows, latIdx, lonIdx = val
-
-        #lonlats = [(r[lonIdx], r[latIdx]) for r in rows if r]
-        #flat_lonlat = [item for sublist in lonlats for item in sublist]
-        for i, row in enumerate(rows):
+        for row in rows:
             if not row:
-                break
-            lat, lon = float(row[latIdx]), float(row[lonIdx])
+                continue
+            lat, lon = float(row[lat_idx]), float(row[lon_idx])
 
-            row.extend(lonlat2xyq(lat, lon))
-
-            agg_data = get_agg_data(pgres, aug_name, lon, lat)
-            if agg_data:
-                row.extend(agg_data)
+            aug_data = get_aug_data(pgres, lon, lat)
+            if aug_data:
+                row.extend(aug_data)
             else:
                 #LOGGER.warn('missing augmentation for row %s', i)
-                row.extend([None for _ in COLUMNS])
+                row.extend([None for _ in columns])
+
+            row.extend(lonlat2xyq(lat, lon))
         out_q.put(rows)
 
 
 def write_rows(out_q):
+    '''
+    Read from output queue and write til we're done.
+    '''
     writer = csv.writer(sys.stdout)
     for rows in iter(out_q.get, "STOP"):
         for row in rows:
@@ -183,21 +219,36 @@ def write_rows(out_q):
                 writer.writerow(row)
 
 
-def main(latcolno, loncolno, aug_name):
+def get_config(config_url):
+    """
+    Obtain config details from URL
+    """
+    return json.loads(urllib2.urlopen(config_url).read())
+
+
+def main(config_url):
+    '''
+    Process a stream of data from STDIN based off the JSON config found at
+    `config_url`.
+    '''
     itx_q = multiprocessing.Queue() # Our intersection job queue
     out_q = multiprocessing.Queue() # Our output queue
 
-    pgres = psycopg2.connect('postgres:///census').cursor()
+    config = get_config(config_url)
+    create_output_table(config)
 
     reader = csv.reader(sys.stdin)
-    headers = reader.next()
-    headers.extend(get_aug_headers(pgres, aug_name))
-    create_output_table(pgres, headers)
+    if config.get('csv', {}).get('header'):
+        reader.next()  # Skip header row, by default does not
 
-    # Create a process for calculating row intersections. Provide it shared memory objects
-    itx_ps = [PostgresProcess(target=augment_row, args=(itx_q, out_q, aug_name))
+    lon_idx, lat_idx = find_lon_lat_column_idxs(config)
+
+    # Create processes for calculating row intersections
+    itx_ps = [multiprocessing.Process(target=augment_row,
+                                      args=(itx_q, out_q, lon_idx, lat_idx, config))
               for _ in range(NUM_PROCS)]
 
+    # Create process for output
     out_ps = multiprocessing.Process(target=write_rows, args=(out_q,))
 
     try:
@@ -206,13 +257,13 @@ def main(latcolno, loncolno, aug_name):
         out_ps.start()
 
         # Start parsing the CSV
-        parse_input_csv(itx_q, out_q, int(latcolno), int(loncolno), pgres,
-                        aug_name)
+        parse_input_csv(itx_q, config)
 
         for process in itx_ps:
             process.join()
         out_q.put("STOP")
         out_ps.join()
+        sys.stdout.write('\\.\n')
     except BaseException:
         _, _, exc_traceback = sys.exc_info()
 
