@@ -10,6 +10,7 @@ import traceback
 import psycopg2
 import json
 import urllib2
+import os
 from math import floor, sin, log, pi, radians
 from itertools import izip_longest
 
@@ -20,28 +21,6 @@ LOGGER.addHandler(logging.StreamHandler(sys.stderr))
 
 NUM_PROCS = multiprocessing.cpu_count()
 #NUM_PROCS = 1
-
-#COLUMNS = [
-#    'geoid',
-#    'b01001001',
-#    'b01001002',
-#    'b01001026',
-#    'b03002012',
-#    'b03002006',
-#    'b03002004',
-#    'b03002003',
-#    'b09001001',
-#    'b09020001',
-#    'b11001001',
-#    'b14001002',
-#    'B15003022',
-#    'b15003017',
-#    'b17001002',
-#    'b19013001',
-#    'b22003002',
-#    'b23025003',
-#    'b23025005'
-#]
 
 CHUNK_SIZE = 10
 
@@ -172,7 +151,13 @@ def augment_row(itx_q, out_q, lon_idx, lat_idx, config):
     from postgres if necessary.
     '''
 
-    conn = psycopg2.connect('postgres:///census')
+    conn = psycopg2.connect('postgres://{user}:{password}@{host}:{port}/{dbname}'.format(
+        user=os.environ.get('PGUSER', ''),
+        password=os.environ.get('PGPASS', ''),
+        host=os.environ.get('PGHOST', ''),
+        port=os.environ.get('PGPORT', ''),
+        dbname=os.environ.get('PGDATABASE', '')
+    ))
     conn.set_isolation_level(0)
     conn.set_session(autocommit=True, readonly=True)
 

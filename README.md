@@ -74,11 +74,22 @@ COPY-ready SQL, so you can pipe it directly into `psql`.
 An output table will automatically be generated using the table's `name` in the
 metadata.
 
+You'll need to tell `augor` where to find the database with the census table on
+it.  It will read from the postgres database defined in the environment via
+[environment variables](http://www.postgresql.org/docs/current/static/libpq-envars.html).
+If you followed the above instructions, this should work fine:
+
+    export PGDATABASE=census
+
+However, in other setups you may need to specify `PGUSER`, `PGPASSWORD`,
+`PGHOST`, `PGPORT`, etc.
+
 Then you should be able to pipe in the data using COPY:
 
     cat path/to/input.csv | python augment.py <metadata url> | psql
 
-The table will be created in whatever database `psql` connects to.
+The table will be created in whatever database `psql` connects to, which by
+default should be the same one specified in the environment variables above.
 
 If you want to time progress as it's happening and get stats on time for the
 process, you can save the input filesize and use `pv`:
