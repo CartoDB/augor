@@ -230,8 +230,8 @@ def main(config_url):
     Process a stream of data from STDIN based off the JSON config found at
     `config_url`.
     '''
-    itx_q = multiprocessing.Queue() # Our intersection job queue
-    out_q = multiprocessing.Queue() # Our output queue
+    itx_q = multiprocessing.Queue(32767) # Our intersection job queue
+    out_q = multiprocessing.Queue(32767) # Our output queue
 
     config = get_config(config_url)
     create_output_table(config)
