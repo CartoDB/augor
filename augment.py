@@ -11,6 +11,7 @@ import psycopg2
 import json
 import urllib2
 import os
+import operator
 from math import floor, sin, log, pi, radians
 from itertools import izip_longest
 
@@ -65,7 +66,7 @@ def create_output_table(config):
     columndef = [{
         'name': c['attr'],
         'type': tabletype(c['type'])
-    } for c in config['attributes']]
+    } for c in config['attributes'] + config['augmentations']]
 
     # TODO how we should actually handle quadkey
     columndef += [{
@@ -96,11 +97,11 @@ def find_lon_lat_column_idxs(config):
     Determine lon/lat column indexes from config file. Returns tuple (lon_idx,
     lat_idx).
     '''
-    for i, col in enumerate(config['attributes']):
+    for col in config['attributes']:
         if col['type'] == 'latitude':
-            lat_idx = i
+            lat_idx = col['csv']
         elif col['type'] == 'longitude':
-            lon_idx = i
+            lon_idx = col['csv']
     return (lon_idx, lat_idx)
 
 
@@ -165,32 +166,39 @@ def augment_row(itx_q, out_q, lon_idx, lat_idx, config):
 
     # prepare query for the attributes we need
     # TODO should not use `census_extract` table
-    columns = [col['augmentation']['code'] for
-               col in config['attributes'] if 'augmentation' in col]
+    augmentation_columns = [col['augmentation']['code'] for col in config['augmentations']]
     pgres.execute(
         "prepare selectbylonlat as " \
         'SELECT {columns} FROM census_extract ce WHERE ' \
         'geoid LIKE \'14000US%\' AND ({st_within})' \
-        .format(columns=', '.join(columns),
+        .format(columns=', '.join(augmentation_columns),
                 st_within='ST_WITHIN(ST_SetSRID(ST_Point($1, $2), 4326), ce.geom)'))
+
+    # Determine name and order of input columns from a config
+    csv_columns = [col['csv'] for col in config['attributes']]
 
     #writer = csv.writer(sys.stdout)
     for rows in iter(itx_q.get, "STOP"):
 
+        out_rows = []
         for row in rows:
             if not row:
                 continue
             lat, lon = float(row[lat_idx]), float(row[lon_idx])
 
+            out_row = list(operator.itemgetter(*csv_columns)(row))
+
             aug_data = get_aug_data(pgres, lon, lat)
             if aug_data:
-                row.extend(aug_data)
+                out_row.extend(aug_data)
             else:
                 #LOGGER.warn('missing augmentation for row %s', i)
-                row.extend([None for _ in columns])
+                out_row.extend([None for _ in augmentation_columns])
 
-            row.extend(lonlat2xyq(lat, lon))
-        out_q.put(rows)
+            out_row.extend(lonlat2xyq(lat, lon))
+            out_rows.append(out_row)
+
+        out_q.put(out_rows)
 
 
 def write_rows(out_q):
@@ -198,6 +206,7 @@ def write_rows(out_q):
     Read from output queue and write til we're done.
     '''
     writer = csv.writer(sys.stdout)
+
     for rows in iter(out_q.get, "STOP"):
         for row in rows:
             if row:
@@ -239,7 +248,7 @@ def main(config_url):
               for _ in range(NUM_PROCS)]
 
     # Create process for output
-    out_ps = multiprocessing.Process(target=write_rows, args=(out_q,))
+    out_ps = multiprocessing.Process(target=write_rows, args=(out_q, ))
 
     try:
         for process in itx_ps:
