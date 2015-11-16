@@ -219,11 +219,16 @@ def write_rows(out_q):
                 writer.writerow(row)
 
 
-def get_config(config_url):
+def get_config(config_uri):
     """
     Obtain config details from URL
     """
-    return json.loads(urllib2.urlopen(config_url).read())
+    if config_uri.startswith('http'):
+        return json.loads(urllib2.urlopen(config_uri).read())
+    else:
+        with open(config_uri, 'r') as config_file:
+            config = json.load(config_file)
+        return config
 
 
 def main(config_url):
