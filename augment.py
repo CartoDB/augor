@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: UTF-8 -*-
-# index.py
+# augment.py
 
 import csv
 import multiprocessing
@@ -23,7 +23,8 @@ LOGGER.addHandler(logging.StreamHandler(sys.stderr))
 NUM_PROCS = multiprocessing.cpu_count()
 #NUM_PROCS = 1
 
-CHUNK_SIZE = 10
+CHUNK_SIZE = 50
+SELECT_COLUMNS = ', '.join(['%s' for _ in xrange(0, CHUNK_SIZE*2)])
 
 
 def grouper(iterable, size, fillvalue=None):
@@ -35,12 +36,14 @@ def grouper(iterable, size, fillvalue=None):
     return izip_longest(fillvalue=fillvalue, *args)
 
 
-def get_aug_data(pgres, lon, lat):
+def get_aug_data(pgres, lonlats):
     '''
     Return augmented data by lon/lat.
     '''
-    pgres.execute('execute selectbylonlat(%s, %s)', (lon, lat, ))
-    return pgres.fetchone()
+    if len(lonlats) < CHUNK_SIZE * 2:
+        lonlats.extend([None for _ in xrange(CHUNK_SIZE * 2 - len(lonlats))])
+    pgres.execute('execute selectbylonlat({})'.format(SELECT_COLUMNS), lonlats)
+    return pgres
 
 
 def tabletype(configtype):
@@ -168,11 +171,13 @@ def augment_row(itx_q, out_q, lon_idx, lat_idx, config):
     # TODO should not use `census_extract` table
     augmentation_columns = [col['augmentation']['code'] for col in config['augmentations']]
     pgres.execute(
-        "prepare selectbylonlat as " \
-        'SELECT {columns} FROM census_extract ce WHERE ' \
-        'geoid LIKE \'14000US%\' AND ({st_within})' \
-        .format(columns=', '.join(augmentation_columns),
-                st_within='ST_WITHIN(ST_SetSRID(ST_Point($1, $2), 4326), ce.geom)'))
+        "PREPARE selectbylonlat as " \
+        'SELECT {columns} FROM (VALUES {values}) t (lat, lon) ' \
+        'LEFT JOIN census_extract ce ' \
+        'ON ST_WITHIN(ST_SetSRID(ST_Point(lon::FLOAT, lat::FLOAT), 4326), ce.geom) ' \
+        'WHERE geoid IS NULL OR geoid LIKE \'14000US%\' ' \
+        .format(values=', '.join(['(${}, ${})'.format(i*2+1, i*2+2) for i in xrange(0, CHUNK_SIZE)]),
+                columns=', '.join(augmentation_columns)))
 
     # Determine name and order of input columns from a config
     csv_columns = [col['csv'] for col in config['attributes']]
@@ -181,18 +186,19 @@ def augment_row(itx_q, out_q, lon_idx, lat_idx, config):
     for rows in iter(itx_q.get, "STOP"):
 
         out_rows = []
-        for row in rows:
+        lonlats = [ll for row in rows if row
+                   for ll in (float(row[lat_idx]), float(row[lon_idx]))]  # flatten lonlats
+        for i, aug_data in enumerate(get_aug_data(pgres, lonlats)):
+            row = rows[i]
             if not row:
                 continue
             lat, lon = float(row[lat_idx]), float(row[lon_idx])
-
             out_row = list(operator.itemgetter(*csv_columns)(row))
 
-            aug_data = get_aug_data(pgres, lon, lat)
             if aug_data:
                 out_row.extend(aug_data)
             else:
-                #LOGGER.warn('missing augmentation for row %s', i)
+                LOGGER.warn('missing augmentation for row %s', i)
                 out_row.extend([None for _ in augmentation_columns])
 
             out_row.extend(lonlat2xyq(lat, lon))

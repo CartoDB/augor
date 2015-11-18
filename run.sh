@@ -3,6 +3,7 @@
 INPUT=$1
 WC=$(wc -l $1)
 FILESIZE=$(echo $WC | cut -d ' ' -f 1)
+export PGDATABASE=census
 time cat $1 | python augment.py $2 | pv -a -r -p -e -l -s $FILESIZE | psql -d census
 
 # example
