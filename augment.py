@@ -61,8 +61,12 @@ def create_output_table(config):
     Create an augmented output table with the specified columns.
     Prints commands needed to COPY into this new table to STDOUT.
     '''
-    tablename = config['table']['name']
-    stmt = 'SET statement_timeout=0; DROP TABLE IF EXISTS "{name}";\n'.format(name=tablename)
+    if config['table']['schema']:
+        tablename = '"{schema}"."{table}"'.format(schema=config['table']['schema'], table=config['table']['name'])
+    else:
+        tablename = '"{table}"'.format(table=config['table']['name'])
+
+    stmt = 'SET statement_timeout=0; DROP TABLE IF EXISTS {name};\n'.format(name=tablename)
     LOGGER.debug(stmt)
     sys.stdout.write(stmt)
 
@@ -83,7 +87,7 @@ def create_output_table(config):
         'type': 'int8'
     }]
 
-    stmt = 'CREATE UNLOGGED TABLE "{name}" ({columns});\n'.format(
+    stmt = 'CREATE UNLOGGED TABLE {name} ({columns});\n'.format(
         name=tablename,
         columns=', '.join(['{name} {type}'.format(**c) for c in columndef])
     )
