@@ -62,7 +62,7 @@ def create_output_table(config):
     Prints commands needed to COPY into this new table to STDOUT.
     '''
     tablename = config['table']['name']
-    stmt = 'DROP TABLE IF EXISTS "{name}";\n'.format(name=tablename)
+    stmt = 'SET statement_timeout=0; DROP TABLE IF EXISTS "{name}";\n'.format(name=tablename)
     LOGGER.debug(stmt)
     sys.stdout.write(stmt)
 
@@ -83,7 +83,7 @@ def create_output_table(config):
         'type': 'int8'
     }]
 
-    stmt = 'CREATE TABLE "{name}" ({columns});\n'.format(
+    stmt = 'CREATE UNLOGGED TABLE "{name}" ({columns});\n'.format(
         name=tablename,
         columns=', '.join(['{name} {type}'.format(**c) for c in columndef])
     )
