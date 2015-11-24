@@ -73,11 +73,11 @@ def create_output_table(config):
 
     # TODO how we should actually handle quadkey
     columndef += [{
-        'name': 'x',
-        'type': 'int8'
+        'name': 'quadkey_x',
+        'type': 'float'
     }, {
-        'name': 'y',
-        'type': 'int8'
+        'name': 'quadkey_y',
+        'type': 'float'
     }, {
         'name': 'quadkey',
         'type': 'int8'
