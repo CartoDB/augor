@@ -79,7 +79,7 @@ def create_output_table(config):
         'name': 'y',
         'type': 'int8'
     }, {
-        'name': 'q',
+        'name': 'quadkey',
         'type': 'int8'
     }]
 
