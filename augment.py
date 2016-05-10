@@ -173,15 +173,15 @@ def augment_row(itx_q, out_q, lon_idx, lat_idx, config):
 
     # prepare query for the attributes we need
     # TODO should not use `census_extract` table
-    augmentation_columns = [col['augmentation']['code'] for col in config['augmentations']]
-    pgres.execute(
-        "PREPARE selectbylonlat as " \
-        'SELECT {columns} FROM (VALUES {values}) t (lat, lon) ' \
-        'LEFT JOIN census_extract ce ' \
-        'ON ST_WITHIN(ST_SetSRID(ST_Point(lon::FLOAT, lat::FLOAT), 4326), ce.geom) ' \
-        'WHERE geoid IS NULL OR geoid LIKE \'14000US%\' ' \
-        .format(values=', '.join(['(${}, ${})'.format(i*2+1, i*2+2) for i in xrange(0, CHUNK_SIZE)]),
-                columns=', '.join(augmentation_columns)))
+    #augmentation_columns = [col['augmentation']['code'] for col in config['augmentations']]
+    #pgres.execute(
+    #    "PREPARE selectbylonlat as " \
+    #    'SELECT {columns} FROM (VALUES {values}) t (lat, lon) ' \
+    #    'LEFT JOIN census_extract ce ' \
+    #    'ON ST_WITHIN(ST_SetSRID(ST_Point(lon::FLOAT, lat::FLOAT), 4326), ce.geom) ' \
+    #    'WHERE geoid IS NULL OR geoid LIKE \'14000US%\' ' \
+    #    .format(values=', '.join(['(${}, ${})'.format(i*2+1, i*2+2) for i in xrange(0, CHUNK_SIZE)]),
+    #            columns=', '.join(augmentation_columns)))
 
     # Determine name and order of input columns from a config
     csv_columns = [col['csv'] for col in config['attributes']]
@@ -192,18 +192,19 @@ def augment_row(itx_q, out_q, lon_idx, lat_idx, config):
         out_rows = []
         lonlats = [ll for row in rows if row
                    for ll in (float(row[lat_idx]), float(row[lon_idx]))]  # flatten lonlats
-        for i, aug_data in enumerate(get_aug_data(pgres, lonlats)):
+        #for i, aug_data in enumerate(get_aug_data(pgres, lonlats)):
+        for i, row in enumerate(rows):
             row = rows[i]
             if not row:
                 continue
             lat, lon = float(row[lat_idx]), float(row[lon_idx])
             out_row = list(operator.itemgetter(*csv_columns)(row))
 
-            if aug_data:
-                out_row.extend(aug_data)
-            else:
-                LOGGER.warn('missing augmentation for row %s', i)
-                out_row.extend([None for _ in augmentation_columns])
+            #if aug_data:
+            #    out_row.extend(aug_data)
+            #else:
+            #    LOGGER.warn('missing augmentation for row %s', i)
+            #    out_row.extend([None for _ in augmentation_columns])
 
             out_row.extend(lonlat2xyq(lat, lon))
             out_rows.append(out_row)
